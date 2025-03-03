@@ -30,6 +30,13 @@ func (ctx *MsgContext) GenDefaultRollVmConfig() *ds.RollConfig {
 
 	am := ctx.Dice.AttrsManager
 	config.HookValueStore = func(vm *ds.Context, name string, v *ds.VMValue) (overwrite *ds.VMValue, solved bool) {
+		// 全局变量
+		if strings.HasPrefix(name, "$u") {
+			uniqueAttrs := lo.Must(am.LoadById("ENEuniqueID06Orpheus"))
+			uniqueAttrs.Store(name, v)
+			return nil, true
+		}
+
 		// 临时变量
 		if strings.HasPrefix(name, "$t") {
 			if ctx.Player.ValueMapTemp == nil {
@@ -775,7 +782,7 @@ func (ctx *MsgContext) CreateVmIfNotExists() {
 		if curVal != nil {
 			return curVal
 		}
-
+		// 临时变量
 		if strings.HasPrefix(name, "$t") {
 			if ctx.Player.ValueMapTemp != nil {
 				if v, ok := ctx.Player.ValueMapTemp.Load(name); ok {
@@ -786,6 +793,15 @@ func (ctx *MsgContext) CreateVmIfNotExists() {
 		}
 
 		if strings.HasPrefix(name, "$") {
+			// 全局变量
+			if strings.HasPrefix(name, "$u") {
+				uniqueAttrs := lo.Must(am.LoadById("ENEuniqueID06Orpheus"))
+				if v := uniqueAttrs.Load(name); v != nil {
+					return v
+				}
+				return ds.NewIntVal(0)
+			}
+			// 个人变量
 			if strings.HasPrefix(name, "$m") {
 				if ctx.Session != nil && ctx.Player != nil {
 					playerAttrs := lo.Must(am.LoadById(ctx.Player.UserID))
@@ -795,6 +811,7 @@ func (ctx *MsgContext) CreateVmIfNotExists() {
 				}
 				return ds.NewIntVal(0)
 			}
+			// 群变量
 			if strings.HasPrefix(name, "$g") && ctx.Group != nil {
 				groupAttrs := lo.Must(am.LoadById(ctx.Group.GroupID))
 				if v := groupAttrs.Load(name); v != nil {

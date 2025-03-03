@@ -42,6 +42,13 @@ func VarSetValue(ctx *MsgContext, s string, v *ds.VMValue) {
 	name := GetValueNameByAlias(s, aliasMapForCtx(ctx))
 	vClone := v.Clone()
 
+	// 全局变量
+	if strings.HasPrefix(s, "$u") {
+		uniqueAttrs := lo.Must(am.LoadById("ENEuniqueID06Orpheus"))
+		uniqueAttrs.Store(s, vClone)
+		return
+	}
+
 	// 临时变量
 	if strings.HasPrefix(s, "$t") {
 		// 如果是内部设置的临时变量，不需要长期存活
@@ -80,6 +87,13 @@ func VarSetValue(ctx *MsgContext, s string, v *ds.VMValue) {
 func VarDelValue(ctx *MsgContext, s string) {
 	am := ctx.Dice.AttrsManager
 	name := GetValueNameByAlias(s, aliasMapForCtx(ctx))
+
+	// 全局变量
+	if strings.HasPrefix(s, "$u") {
+		uniqueAttrs := lo.Must(am.LoadById("ENEuniqueID06Orpheus"))
+		uniqueAttrs.Delete(s)
+		return
+	}
 
 	// 临时变量
 	if strings.HasPrefix(s, "$t") {
@@ -136,6 +150,12 @@ func VarGetValueComputed(ctx *MsgContext, s string) (string, bool) {
 func VarGetValue(ctx *MsgContext, s string) (*ds.VMValue, bool) {
 	name := GetValueNameByAlias(s, aliasMapForCtx(ctx))
 	am := ctx.Dice.AttrsManager
+
+	// 全局变量
+	if strings.HasPrefix(s, "$u") {
+		uniqueAttrs := lo.Must(am.LoadById("ENEuniqueID06Orpheus"))
+		return uniqueAttrs.LoadX(s)
+	}
 
 	// 临时变量
 	if strings.HasPrefix(s, "$t") {
