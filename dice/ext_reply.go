@@ -229,9 +229,9 @@ func RegisterBuiltinExtReply(dice *Dice) {
 					lastTime := ctx.Group.LastCustomReplyTime
 					now := float64(time.Now().UnixMilli()) / 1000
 					interval := rc.Interval
-					if interval < 2 {
-						interval = 2
-					}
+					// if interval < 2 {
+					// 	interval = 2
+					// }
 
 					if now-lastTime < interval {
 						return true // 未达到冷却，退出
