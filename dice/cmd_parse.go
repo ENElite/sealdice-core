@@ -709,6 +709,20 @@ func ImageRewrite(longText string, solve func(text string) string) string {
 	return newText
 }
 
+func TextRewrite(longText string, solve func(text string) string) string {
+	re := regexp.MustCompile(`\[(文本|text):(.+?)]`) // [text:] 或 [文本:]
+	m := re.FindAllStringIndex(longText, -1)
+
+	newText := longText
+	for i := len(m) - 1; i >= 0; i-- {
+		p := m[i]
+		text := solve(longText[p[0]:p[1]])
+		newText = newText[:p[0]] + text + newText[p[1]:]
+	}
+
+	return newText
+}
+
 func DeckRewrite(longText string, solve func(text string) string) string {
 	re := regexp.MustCompile(`###DRAW-(\S+?)###`)
 	m := re.FindAllStringIndex(longText, -1)

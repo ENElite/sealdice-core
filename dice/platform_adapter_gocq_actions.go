@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
-	"net/url"
+	url "net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	http "net/http"
+	io "io"
 
 	"sealdice-core/message"
 	"sealdice-core/utils"
@@ -799,6 +801,39 @@ func textSplit(input string) []string {
 // 以下都是CQ码处理
 // 相对路径不能在这里实现，不然遇到嵌套调用无法展开
 func textAssetsConvert(s string) string {
+	solve3 := func(text string) string {
+		re := regexp.MustCompile(`\[(文本|text):(.+?)]`) // [text:] 或 [文本:]
+		m := re.FindStringSubmatch(text)
+		if m != nil {
+			fn := m[2] // 拿到:后面的(.+?)
+			if strings.HasPrefix(fn, "http://") || strings.HasPrefix(fn, "https://") {
+				u, err := url.Parse(fn)
+				if err != nil {
+					return "[URL地址不合法]"
+				}
+				// 不对path进行编码
+				// u.Path = url.PathEscape(u.Path)
+				
+				// 仅对query进行编码
+				query := u.Query()
+    			u.RawQuery = query.Encode()
+				
+				response, err := http.Get(u.String())
+				if err != nil {
+					return "[URL请求失败]"
+				}
+				defer response.Body.Close()
+				body, err := io.ReadAll(response.Body)
+				if err != nil {
+					return "[获取文本失败]"
+				}
+				s := string(body)
+				return s
+			}
+		}
+		return text
+	}
+
 	solve2 := func(text string) string {
 		re := regexp.MustCompile(`\[(img|图|文本|text|语音|voice|视频|video):(.+?)]`) // [img:] 或 [图:]
 		m := re.FindStringSubmatch(text)
@@ -902,6 +937,7 @@ func textAssetsConvert(s string) string {
 	}
 
 	text := strings.ReplaceAll(s, `\n`, "\n")
+	text = TextRewrite(text, solve3)
 	text = ImageRewrite(text, solve2)
 	return CQRewrite(text, solve)
 }
