@@ -34,6 +34,7 @@ import (
 	"sealdice-core/static"
 	"sealdice-core/utils/crypto"
 
+	mcp "sealdice-core/utils/plugin/mcp"
 	sealws "sealdice-core/utils/plugin/websocket"
 )
 
@@ -104,10 +105,15 @@ func (d *Dice) JsInit() {
 	d.JsScriptCron = cron.New()
 	d.JsScriptCronLock = &sync.Mutex{}
 	d.JsScriptCron.Start()
-	// 单独给WebSocket一个Logger
+
+	// 关闭之前的所有WebSocket 并设置logger
 	sealws.SetLogger(d.Logger)
-	// 关闭之前的所有WebSocket
 	sealws.GlobalConnManager.CloseAll()
+
+	// mcp 初始化
+	mcp.SetLogger(d.Logger)
+	mcp.GlobalClientManager.CloseAll()
+
 	// 初始化
 	loop.Run(func(vm *goja.Runtime) {
 		vm.SetFieldNameMapper(goja.TagFieldNameMapper("jsbind", true))
@@ -116,6 +122,8 @@ func (d *Dice) JsInit() {
 		console.Enable(vm)
 
 		sealws.Enable(vm, loop)
+
+		mcp.Enable(vm)
 		// require 模块
 		reg.Enable(vm)
 
