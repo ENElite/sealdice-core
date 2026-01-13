@@ -827,8 +827,11 @@ func textAssetsConvert(s string) string {
 				if err != nil {
 					return "[获取文本失败]"
 				}
-				s := string(body)
-				return s
+				err = json.Unmarshal(body, &text)
+				if err != nil {
+					return "[解析文本失败]"
+				}
+				return text
 			}
 		}
 		return text
