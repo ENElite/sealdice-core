@@ -710,7 +710,7 @@ func ImageRewrite(longText string, solve func(text string) string) string {
 }
 
 func TextRewrite(longText string, solve func(text string) string) string {
-	re := regexp.MustCompile(`\[(文本|text):(.+?)]`) // [text:] 或 [文本:]
+	re := regexp.MustCompile(`(?s)\[(文本|text):(.+?)]`) // [text:] 或 [文本:] 支持多行
 	m := re.FindAllStringIndex(longText, -1)
 
 	newText := longText

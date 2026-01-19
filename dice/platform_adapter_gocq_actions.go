@@ -802,12 +802,19 @@ func textSplit(input string) []string {
 // 相对路径不能在这里实现，不然遇到嵌套调用无法展开
 func textAssetsConvert(s string) string {
 	solve3 := func(text string) string {
-		re := regexp.MustCompile(`\[(文本|text):(.+?)]`) // [text:] 或 [文本:]
+		re := regexp.MustCompile(`(?s)\[(文本|text):(.+?)]`) // [text:] 或 [文本:]
 		m := re.FindStringSubmatch(text)
 		if m != nil {
 			fn := m[2] // 拿到:后面的(.+?)
 			if strings.HasPrefix(fn, "http://") || strings.HasPrefix(fn, "https://") {
-				u, err := url.Parse(fn)
+				i := strings.Index(fn, "?")
+				
+				base := fn
+				if i != -1 {
+					base = fn[:i]
+				}
+
+				u, err := url.Parse(base)
 				if err != nil {
 					return "[URL地址不合法]"
 				}
@@ -815,8 +822,19 @@ func textAssetsConvert(s string) string {
 				// u.Path = url.PathEscape(u.Path)
 				
 				// 仅对query进行编码
-				query := u.Query()
-    			u.RawQuery = query.Encode()
+				if i != -1 {
+					q := url.Values{}
+
+					for _, pair := range strings.Split(fn[i+1:], "&") {
+						kv := strings.SplitN(pair, "=", 2)
+						if len(kv) != 2 {
+							continue
+						}
+						q.Set(kv[0], url.QueryEscape(kv[1]))
+					}
+
+					u.RawQuery = q.Encode()
+				}
 				
 				response, err := http.Get(u.String())
 				if err != nil {
