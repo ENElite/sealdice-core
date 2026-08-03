@@ -238,6 +238,7 @@ type Dice struct {
 	JsScriptList     []*JsScriptInfo `json:"-" yaml:"-"`
 	JsScriptCron     *cron.Cron      `json:"-" yaml:"-"`
 	JsScriptCronLock *sync.Mutex     `json:"-" yaml:"-"`
+	jsExecCancel     func()
 	// 重载使用的互斥锁
 	JsReloadLock sync.Mutex `json:"-" yaml:"-"`
 	// 内置脚本摘要表，用于判断内置脚本是否有更新

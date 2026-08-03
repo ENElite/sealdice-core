@@ -3,6 +3,7 @@ package dice
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -87,6 +88,8 @@ func (d *Dice) JsInit() {
 	}
 	// 清理目前的js相关
 	d.jsClear()
+	jsExecCtx, jsExecCancel := context.WithCancel(context.Background())
+	d.jsExecCancel = jsExecCancel
 
 	// 重建js vm
 	reg := new(require.Registry)
@@ -637,6 +640,7 @@ func (d *Dice) JsInit() {
 		// 1.2新增结束
 		_ = seal.Set("setPlayerGroupCard", SetPlayerGroupCardByTemplate)
 		_ = seal.Set("base64ToImage", Base64ToImageFunc())
+		_ = seal.Set("exec", newJsExecFunction(vm, loop, jsExecCtx, d.Logger))
 
 		// Note: Szzrain 暴露dice对象给js会导致js可以调用dice的所有Export的方法
 		// 这是不安全的, 所有需要用到dice实例的函数都可以以传入ctx作为替代
@@ -691,6 +695,11 @@ func (d *Dice) JsShutdown() {
 }
 
 func (d *Dice) jsClear() {
+	if d.jsExecCancel != nil {
+		d.jsExecCancel()
+		d.jsExecCancel = nil
+	}
+
 	// Wrapper 架构：不再调用 ExtRemove，只清空 JsExtRegistry
 	// 注意：不标记 wrapper 为 IsDeleted，否则重载期间消息到达会导致 wrapper 被移除
 	// IsDeleted 只在 JsDelete/ExtRemove（永久删除脚本）时设置
