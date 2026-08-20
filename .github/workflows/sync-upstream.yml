@@ -1,4 +1,4 @@
-name: Sync admin with upstream master
+name: Sync devENE and admin with upstream master
 
 on:
   workflow_dispatch:
@@ -11,7 +11,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: sync-admin-with-upstream
+  group: sync-personal-branches-with-upstream
   cancel-in-progress: false
 
 jobs:
@@ -21,45 +21,81 @@ jobs:
     timeout-minutes: 60
 
     steps:
-      - name: Checkout admin
+      - name: Checkout repository
         uses: actions/checkout@v6
         with:
           ref: admin
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Fetch upstream
+      - name: Fetch branches and upstream
         shell: bash
         run: |
           git remote add upstream https://github.com/sealdice/sealdice-core.git
           git fetch --no-tags upstream master
+          git fetch --no-tags origin \
+            +refs/heads/admin:refs/remotes/origin/admin \
+            +refs/heads/devENE:refs/remotes/origin/devENE
 
-      - name: Merge upstream/master
-        id: merge
+      - name: Merge upstream/master into devENE
+        id: merge_devene
         shell: bash
         run: |
-          if git merge-base --is-ancestor upstream/master HEAD; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "admin already contains the latest upstream/master"
-            exit 0
-          fi
-
           git config user.name "github-actions[bot]"
           git config user.email \
             "41898282+github-actions[bot]@users.noreply.github.com"
 
+          git checkout -B devENE origin/devENE
+
+          if git merge-base --is-ancestor upstream/master HEAD; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "devENE already contains the latest upstream/master"
+            exit 0
+          fi
+
           git merge --no-edit upstream/master
           echo "changed=true" >> "$GITHUB_OUTPUT"
 
+      - name: Merge devENE into admin
+        id: merge_admin
+        shell: bash
+        run: |
+          git checkout -B admin origin/admin
+
+          if git merge-base --is-ancestor devENE HEAD; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "admin already contains the latest devENE"
+            exit 0
+          fi
+
+          git merge --no-edit devENE
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
       - name: Set up Go
-        if: steps.merge.outputs.changed == 'true'
+        if: >-
+          steps.merge_devene.outputs.changed == 'true' ||
+          steps.merge_admin.outputs.changed == 'true'
         uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
 
-      - name: Test merged result
-        if: steps.merge.outputs.changed == 'true'
+      - name: Test devENE result
+        if: steps.merge_devene.outputs.changed == 'true'
+        shell: bash
+        run: |
+          verification_dir="$RUNNER_TEMP/verify-devENE"
+          git worktree add --detach "$verification_dir" devENE
+          trap 'git worktree remove --force "$verification_dir"' EXIT
+
+          cd "$verification_dir"
+          go mod download
+          go generate ./...
+          go test -race ./...
+          go vet ./...
+
+      - name: Test admin result
+        if: steps.merge_admin.outputs.changed == 'true'
         shell: bash
         run: |
           go mod download
@@ -67,25 +103,39 @@ jobs:
           go test -race ./...
           go vet ./...
 
-      - name: Lint merged result
-        if: steps.merge.outputs.changed == 'true'
+      - name: Lint admin result
+        if: >-
+          steps.merge_devene.outputs.changed == 'true' ||
+          steps.merge_admin.outputs.changed == 'true'
         continue-on-error: true
         uses: golangci/golangci-lint-action@v8
         with:
           version: latest
           args: '--timeout 10m'
 
-      - name: Push admin
-        if: steps.merge.outputs.changed == 'true'
+      - name: Push updated branches atomically
+        if: >-
+          steps.merge_devene.outputs.changed == 'true' ||
+          steps.merge_admin.outputs.changed == 'true'
         shell: bash
-        run: git push origin HEAD:admin
+        run: git push --atomic origin devENE:devENE admin:admin
 
-      - name: Trigger Docker build
-        if: steps.merge.outputs.changed == 'true'
+      - name: Trigger Docker builds
+        if: >-
+          steps.merge_devene.outputs.changed == 'true' ||
+          steps.merge_admin.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
-        run: >-
-          gh workflow run docker-image.yml
-          --repo "$GITHUB_REPOSITORY"
-          --ref admin
+        run: |
+          if [[ "${{ steps.merge_devene.outputs.changed }}" == "true" ]]; then
+            gh workflow run docker-image.yml \
+              --repo "$GITHUB_REPOSITORY" \
+              --ref devENE
+          fi
+
+          if [[ "${{ steps.merge_admin.outputs.changed }}" == "true" ]]; then
+            gh workflow run docker-image.yml \
+              --repo "$GITHUB_REPOSITORY" \
+              --ref admin
+          fi
