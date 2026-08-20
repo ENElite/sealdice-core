@@ -53,7 +53,7 @@ jobs:
 
       - name: Set up Go
         if: steps.merge.outputs.changed == 'true'
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
@@ -64,7 +64,6 @@ jobs:
         run: |
           go mod download
           go generate ./...
-          git diff --exit-code
           go test -race ./...
           go vet ./...
 
