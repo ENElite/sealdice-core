@@ -418,7 +418,7 @@ func TestPackageManagerPreviewFromStreamContext(t *testing.T) {
 	}
 	defer src.Close()
 
-	preview, err := pm.PreviewFromStreamContext(context.Background(), src)
+	preview, err := pm.PreviewFromStreamContext(t.Context(), src)
 	if err != nil {
 		t.Fatalf("PreviewFromStreamContext() error = %v", err)
 	}
@@ -490,7 +490,7 @@ func TestPackageManagerInstallFromURLRejectsKnownSizeBeforeRequest(t *testing.T)
 	}))
 	defer server.Close()
 
-	err := pm.InstallFromURLWithOptionsContext(context.Background(), server.URL, PackageDownloadOptions{ExpectedSize: 1})
+	err := pm.InstallFromURLWithOptionsContext(t.Context(), server.URL, PackageDownloadOptions{ExpectedSize: 1})
 	if err == nil || !strings.Contains(err.Error(), "磁盘空间不足") {
 		t.Fatalf("InstallFromURLWithOptionsContext() error = %v, want disk rejection", err)
 	}
@@ -515,20 +515,20 @@ func TestPackageManagerInstallFromURLStopsAfterIdleTimeout(t *testing.T) {
 	}))
 	defer server.Close()
 
-	err := pm.InstallFromURLContext(context.Background(), server.URL, nil)
+	err := pm.InstallFromURLContext(t.Context(), server.URL, nil)
 	if err == nil || !strings.Contains(err.Error(), "没有接收到数据") {
 		t.Fatalf("InstallFromURLContext() error = %v, want idle timeout", err)
 	}
 }
 
 func TestAcquirePackageOperationHonorsCancellation(t *testing.T) {
-	release, err := acquirePackageOperation(context.Background())
+	release, err := acquirePackageOperation(t.Context())
 	if err != nil {
 		t.Fatalf("acquirePackageOperation() error = %v", err)
 	}
 	defer release()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	if _, err := acquirePackageOperation(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("acquirePackageOperation() error = %v, want context cancellation", err)
@@ -760,6 +760,80 @@ func TestPackageManagerReloadAllLoadsTemplateFilesFromEnabledPackages(t *testing
 	}
 	if got := strings.Join(tmpl.SetConfig.Keys, ","); got != "pkgtest,pkgtest-rule" {
 		t.Fatalf("pkgtest set keys = %q, want %q", got, "pkgtest,pkgtest-rule")
+	}
+}
+
+func TestPackageSetupRestoresEnabledPackageTemplatesAfterRestart(t *testing.T) {
+	_, pm := newTestPackageManager(t)
+	if err := pm.Init(); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	const pkgID = "alice/template-restart-pack"
+	archive := createTestSealPack(t, "", pkgID, "1.0.0", map[string][]string{
+		"templates": {"templates/*.yaml"},
+	}, map[string]string{
+		"templates/restart.yaml": loadTemplateFixture(t, "restart-template"),
+	})
+	if err := pm.Install(archive); err != nil {
+		t.Fatalf("Install() error = %v", err)
+	}
+	if _, err := pm.Enable(pkgID); err != nil {
+		t.Fatalf("Enable() error = %v", err)
+	}
+
+	restarted := &Dice{
+		BaseConfig:    BaseConfig{DataDir: "."},
+		Logger:        zap.NewNop().Sugar(),
+		GameSystemMap: new(SyncMap[string, *GameSystemTemplate]),
+	}
+	restarted.PackageSetup()
+
+	pkg, exists := restarted.PackageManager.Get(pkgID)
+	if !exists || pkg.State != sealpack.PackageStateEnabled {
+		t.Fatalf("expected package %s to be restored as enabled, got %#v", pkgID, pkg)
+	}
+	if _, exists := restarted.GameSystemMap.Load("restart-template"); !exists {
+		t.Fatal("expected enabled package template to be restored during PackageSetup")
+	}
+}
+
+func TestJsClearRestoresEnabledPackageTemplates(t *testing.T) {
+	testDice, pm := newTestPackageManager(t)
+	testDice.GameSystemMap = new(SyncMap[string, *GameSystemTemplate])
+	if err := pm.Init(); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	const pkgID = "alice/template-js-clear-pack"
+	archive := createTestSealPack(t, "", pkgID, "1.0.0", map[string][]string{
+		"templates": {"templates/*.yaml"},
+	}, map[string]string{
+		"templates/static.yaml": loadTemplateFixture(t, "static-template"),
+	})
+	if err := pm.Install(archive); err != nil {
+		t.Fatalf("Install() error = %v", err)
+	}
+	if _, err := pm.Enable(pkgID); err != nil {
+		t.Fatalf("Enable() error = %v", err)
+	}
+	if err := pm.reloadTemplates(); err != nil {
+		t.Fatalf("reloadTemplates() error = %v", err)
+	}
+
+	testDice.GameSystemTemplateAddEx(&GameSystemTemplate{
+		GameSystemTemplateV2: &GameSystemTemplateV2{Name: "js-only-template"},
+	}, true)
+	testDice.jsClear()
+
+	if _, exists := testDice.GameSystemMap.Load("static-template"); !exists {
+		t.Fatal("expected enabled package template to survive jsClear")
+	}
+	if _, exists := testDice.GameSystemMap.Load("js-only-template"); exists {
+		t.Fatal("expected JS-only template to be removed by jsClear")
+	}
+	if _, exists := testDice.GameSystemMap.Load("coc7"); !exists {
+		t.Fatal("expected builtin templates to remain available after jsClear")
 	}
 }
 

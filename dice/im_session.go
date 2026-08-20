@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	randv2 "math/rand/v2"
 	"regexp"
 	"runtime/debug"
 	"sort"
@@ -658,6 +659,51 @@ type IMSession struct {
 	EndPoints    []*EndPointInfo                    `yaml:"endPoints"`
 	ServiceAtNew *SyncMap[string, *GroupInfo]       `json:"servicesAt" yaml:"-"`
 	PendingQuits *SyncMap[string, *PendingQuitInfo] `json:"-" yaml:"-"`
+
+	endPointsSnapshot      atomic.Pointer[[]*EndPointInfo]
+	groupMemberWelcomeMu   sync.Mutex
+	lastGroupMemberWelcome *LastWelcomeInfo
+}
+
+// EndPointDisplaySnapshot 是托盘菜单所需的端点展示值快照。
+// 它不包含适配器、会话、锁或通道，发布后不会随原端点对象继续变化。
+type EndPointDisplaySnapshot struct {
+	Nickname string
+	UserID   string
+	State    EndpointState
+}
+
+// RefreshEndPointsSnapshot 发布当前端点列表的只读快照。
+func (s *IMSession) RefreshEndPointsSnapshot() {
+	if s == nil {
+		return
+	}
+	snapshot := append([]*EndPointInfo(nil), s.EndPoints...)
+	s.endPointsSnapshot.Store(&snapshot)
+}
+
+// EndPointsSnapshot 返回最近发布列表中各端点展示字段的单次采样。
+// 端点状态由各适配器独立更新，因此该快照提供最终一致的托盘展示语义。
+func (s *IMSession) EndPointsSnapshot() []EndPointDisplaySnapshot {
+	if s == nil {
+		return nil
+	}
+	snapshot := s.endPointsSnapshot.Load()
+	if snapshot == nil {
+		return nil
+	}
+	display := make([]EndPointDisplaySnapshot, 0, len(*snapshot))
+	for _, endpoint := range *snapshot {
+		if endpoint == nil {
+			continue
+		}
+		display = append(display, EndPointDisplaySnapshot{
+			Nickname: endpoint.Nickname,
+			UserID:   endpoint.UserID,
+			State:    endpoint.State,
+		})
+	}
+	return display
 }
 
 func (s *IMSession) ResolveLiveEndpoint(ep *EndPointInfo) (*EndPointInfo, error) {
@@ -785,10 +831,13 @@ type MsgContext struct {
 	SpamCheckedPerson   bool
 	UITestReplySplitLen *int
 
-	splitKeyMu sync.RWMutex
-	splitKey   string
-	vm         *ds.Context
-	_v1Rand    *rand2.PCGSource
+	splitKeyMu  sync.RWMutex
+	splitKey    string
+	vm          *ds.Context
+	_v1Rand     ds.DiceSource
+	diceRandSrc ds.DiceSource
+	chooserRand *randv2.Rand
+	chooserSrc  ds.DiceSource
 }
 
 // fillPrivilege 填写MsgContext中的权限字段, 并返回填写的权限等级
@@ -1562,7 +1611,7 @@ func (ep *EndPointInfo) TriggerCommand(mctx *MsgContext, msg *Message, cmdArgs *
 	var ret bool
 	// 试图匹配自定义指令
 	if mctx.Group != nil && mctx.Group.IsActive(mctx) {
-		for _, wrapper := range mctx.Group.GetActivatedExtList(mctx.Dice) {
+		for _, wrapper := range commandExtensionOrder(mctx.Group, mctx.Dice) {
 			ext := wrapper.GetRealExt()
 			if ext == nil {
 				continue
@@ -1656,54 +1705,74 @@ func (s *IMSession) OnGroupJoined(ctx *MsgContext, msg *Message) {
 	}
 }
 
-var lastWelcome *LastWelcomeInfo
+func (s *IMSession) isDuplicateGroupMemberWelcome(msg *Message) bool {
+	s.groupMemberWelcomeMu.Lock()
+	defer s.groupMemberWelcomeMu.Unlock()
+
+	last := s.lastGroupMemberWelcome
+	isDuplicate := last != nil &&
+		msg.GroupID == last.GroupID &&
+		msg.Sender.UserID == last.UserID &&
+		msg.Time == last.Time
+	s.lastGroupMemberWelcome = &LastWelcomeInfo{
+		GroupID: msg.GroupID,
+		UserID:  msg.Sender.UserID,
+		Time:    msg.Time,
+	}
+	return isDuplicate
+}
 
 // OnGroupMemberJoined 群成员进群事件处理，除了 bot 自己以外的群成员入群时调用。其他 Adapter 应当尽快迁移至此方法实现
 func (s *IMSession) OnGroupMemberJoined(ctx *MsgContext, msg *Message) {
 	log := s.Parent.Logger
 
 	groupInfo, ok := s.ServiceAtNew.Load(msg.GroupID)
+	needWelcome := false
+	reason := "group_not_loaded"
+	if ok {
+		if groupInfo.ShowGroupWelcome {
+			needWelcome = true
+			reason = "welcome_enabled"
+		} else {
+			reason = "welcome_disabled"
+		}
+	}
+	if !needWelcome {
+		log.Infof("检查是否需要迎新: need_welcome=%t reason=%s group_id=%s user_id=%s", needWelcome, reason, msg.GroupID, msg.Sender.UserID)
+		return
+	}
+
 	// 进群的是别人，是否迎新？
 	// 这里很诡异，当手机QQ客户端审批进群时，入群后会有一句默认发言
 	// 此时会收到两次完全一样的某用户入群信息，导致发两次欢迎词
-	if ok && groupInfo.ShowGroupWelcome {
-		isDouble := false
-		if lastWelcome != nil {
-			isDouble = msg.GroupID == lastWelcome.GroupID &&
-				msg.Sender.UserID == lastWelcome.UserID &&
-				msg.Time == lastWelcome.Time
-		}
-		lastWelcome = &LastWelcomeInfo{
-			GroupID: msg.GroupID,
-			UserID:  msg.Sender.UserID,
-			Time:    msg.Time,
-		}
-
-		if !isDouble {
-			func() {
-				defer func() {
-					if r := recover(); r != nil {
-						log.Errorf("迎新致辞异常: %v 堆栈: %v", r, string(debug.Stack()))
-					}
-				}()
-
-				// Ensure context has group set for formatting and attrs access
-				ctx.Group, ctx.Player = GetPlayerInfoBySender(ctx, msg)
-				// VarSetValueStr(ctx, "$t新人昵称", "<"+msgQQ.Sender.Nickname+">")
-				uidRaw := UserIDExtract(msg.Sender.UserID)
-				VarSetValueStr(ctx, "$t帐号ID_RAW", uidRaw)
-				VarSetValueStr(ctx, "$t账号ID_RAW", uidRaw)
-				stdID := msg.Sender.UserID
-				VarSetValueStr(ctx, "$t帐号ID", stdID)
-				VarSetValueStr(ctx, "$t账号ID", stdID)
-				text := DiceFormat(ctx, groupInfo.GroupWelcomeMessage)
-				for _, i := range ctx.SplitText(text) {
-					doSleepQQ(ctx)
-					ReplyGroup(ctx, msg, strings.TrimSpace(i))
-				}
-			}()
-		}
+	if s.isDuplicateGroupMemberWelcome(msg) {
+		log.Infof("检查是否需要迎新: need_welcome=false reason=duplicate_event group_id=%s user_id=%s", msg.GroupID, msg.Sender.UserID)
+		return
 	}
+
+	log.Infof("检查是否需要迎新: need_welcome=true reason=%s group_id=%s user_id=%s", reason, msg.GroupID, msg.Sender.UserID)
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Errorf("迎新致辞异常: %v 堆栈: %v", r, string(debug.Stack()))
+			}
+		}()
+
+		// Ensure context has group set for formatting and attrs access
+		ctx.Group, ctx.Player = GetPlayerInfoBySender(ctx, msg)
+		uidRaw := UserIDExtract(msg.Sender.UserID)
+		VarSetValueStr(ctx, "$t帐号ID_RAW", uidRaw)
+		VarSetValueStr(ctx, "$t账号ID_RAW", uidRaw)
+		stdID := msg.Sender.UserID
+		VarSetValueStr(ctx, "$t帐号ID", stdID)
+		VarSetValueStr(ctx, "$t账号ID", stdID)
+		text := DiceFormat(ctx, groupInfo.GroupWelcomeMessage)
+		log.Infof("发送迎新消息: group_id=%s user_id=%s text=%q", msg.GroupID, msg.Sender.UserID, text)
+		for _, i := range ctx.SplitText(text) {
+			doSleepQQ(ctx)
+			ReplyGroup(ctx, msg, strings.TrimSpace(i))
+		}
+	}()
 }
 
 var platformRE = regexp.MustCompile(`^(.*)-Group:`)
@@ -2218,7 +2287,7 @@ func (s *IMSession) commandSolve(ctx *MsgContext, msg *Message, cmdArgs *CmdArgs
 		}
 
 		if group != nil && (group.Active || ctx.IsCurGroupBotOn) {
-			for _, wrapper := range group.GetActivatedExtList(ctx.Dice) {
+			for _, wrapper := range commandExtensionOrder(group, ctx.Dice) {
 				cmdMap := wrapper.GetCmdMap()
 				item := cmdMap[cmdArgs.Command]
 				if tryItemSolve(wrapper, item) {
@@ -2742,6 +2811,9 @@ func (ctx *MsgContext) ShallowCopy() *MsgContext {
 		UITestReplySplitLen: ctx.UITestReplySplitLen,
 		vm:                  ctx.vm,
 		_v1Rand:             ctx._v1Rand,
+		diceRandSrc:         ctx.diceRandSrc,
+		chooserRand:         ctx.chooserRand,
+		chooserSrc:          ctx.chooserSrc,
 	}
 	copyCtx.SetSplitKey(ctx.getSplitKey())
 	return copyCtx

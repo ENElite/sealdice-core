@@ -159,7 +159,7 @@ func (p *PlatformAdapterOnebot) handleGroupDecreaseAction(req gjson.Result, _ *e
 			txtErr := fmt.Sprintf("离开群组或群解散，删除对应群聊信息失败: <%s>(%s)", groupName, groupId)
 			p.logger.Error(txtErr)
 			if pendingQuit == nil || pendingQuit.Origin != QuitOriginAutoInactive || !session.Parent.Config.QuitInactiveNoticeSummaryMode {
-				ctx.Notice(txtErr, NoticeTypeGroup)
+				ctx.Notice(txtErr)
 			}
 			return nil
 		}
@@ -167,7 +167,7 @@ func (p *PlatformAdapterOnebot) handleGroupDecreaseAction(req gjson.Result, _ *e
 		group.MarkDirty(session.Parent)
 		p.logger.Info(txt)
 		if pendingQuit == nil || pendingQuit.Origin != QuitOriginAutoInactive || !session.Parent.Config.QuitInactiveNoticeSummaryMode {
-			ctx.Notice(txt, NoticeTypeGroup)
+			ctx.Notice(txt)
 		}
 	}
 
@@ -223,7 +223,7 @@ func (p *PlatformAdapterOnebot) handleGroupBanAction(req gjson.Result, _ *evsock
 			ctx.Dice.Config.BanList.AddScoreByGroupMuted(operatorID, groupId, ctx)
 			txt := fmt.Sprintf("被禁言: 在群组<%s>(%s)中被禁言，时长%d秒，操作者:<%s>(%s)", groupName, groupId, duration, userName, operatorID)
 			p.logger.Info(txt)
-			ctx.Notice(txt, NoticeTypeGroup)
+			ctx.Notice(txt)
 		}
 	}
 	return nil
@@ -266,7 +266,7 @@ func (p *PlatformAdapterOnebot) handleJoinGroupAction(req gjson.Result, _ *evsoc
 	// 1. 如果发现进群的是自己，要和大家发入群致辞
 	// 2. 如果发现进群的不是自己，对他进行节流的迎新
 	session := p.EndPoint.Session
-	ctx := &MsgContext{EndPoint: p.EndPoint, Session: session, Dice: session.Parent}
+	ctx := &MsgContext{MessageType: "group", EndPoint: p.EndPoint, Session: session, Dice: session.Parent}
 	msg, err := arrayByte2SealdiceMessage(p.logger, []byte(req.String()))
 	if err != nil {
 		return err
@@ -274,60 +274,26 @@ func (p *PlatformAdapterOnebot) handleJoinGroupAction(req gjson.Result, _ *evsoc
 	userId := canonicalOnebotUserID(req.Get("user_id").String())
 	selfId := canonicalOnebotUserID(req.Get("self_id").String())
 	groupId := canonicalOnebotGroupID(req.Get("group_id").String())
+	msg.MessageType = "group"
+	msg.Platform = "QQ"
+	msg.GroupID = groupId
+	msg.Sender.UserID = userId
 	// 迎新逻辑
 	// 发送入群致辞逻辑
 	if userId == selfId {
-		p.logger.Infof("收到自己的入群请求，准备发送入群致辞")
+		p.logger.Infof("收到自己的入群请求，准备转交统一入群处理")
 		ctx.Group = SetBotOnAtGroup(ctx, groupId)
-		ctx.Group.DiceIDExistsMap.Store(ctx.EndPoint.UserID, true)
 		operatorID := canonicalOnebotUserID(req.Get("operator_id").String())
 		if operatorID != "" && operatorID != selfId {
-			ctx.Group.InviteUserID = operatorID
+			msg.Sender.UserID = operatorID
 		}
-		// 入群时间
-		ctx.Group.EnteredTime = time.Now().Unix()
-		// 标记脏数据
-		ctx.Group.MarkDirty(ctx.Dice)
-		// 获取群信息 并发送入群致辞
 		_ = p.submitAsync(func() {
-			time.Sleep(1 * time.Second)
-			cache := p.GetGroupCacheInfo(groupId)
-			ctx.Player = &GroupPlayerInfo{}
-			p.logger.Infof("发送入群致辞，群: <%s>(%s)", cache.GroupName, groupId)
-			text := DiceFormatTmpl(ctx, "核心:骰子进群")
-			for _, i := range ctx.SplitText(text) {
-				doSleepQQ(ctx)
-				p.SendToGroup(ctx, groupId, strings.TrimSpace(i), "")
-			}
-			if groupInfo, ok := ctx.Session.ServiceAtNew.Load(groupId); ok {
-				groupInfo.TriggerExtHook(ctx.Dice, func(ext *ExtInfo) func() {
-					if ext.OnGroupJoined == nil {
-						return nil
-					}
-					return func() { ext.OnGroupJoined(ctx, msg) }
-				})
-			}
+			session.OnGroupJoined(ctx, msg)
 		})
 	} else {
-		p.logger.Infof("收到非自己的入群请求，准备迎新")
+		p.logger.Infof("收到非自己的入群通知: group_id=%s user_id=%s", groupId, userId)
 		_ = p.submitAsync(func() {
-			time.Sleep(1 * time.Second) // 避免是正在拉人进群的情况（此时会出现大量的迎新），先等一下再取数据
-			group, ok := ctx.Session.ServiceAtNew.Load(msg.GroupID)
-			if ok && group.ShowGroupWelcome {
-				ctx.Group = group
-				ctx.Player = &GroupPlayerInfo{}
-				uidRaw := req.Get("user_id").String()
-				VarSetValueStr(ctx, "$t帐号ID_RAW", uidRaw)
-				VarSetValueStr(ctx, "$t账号ID_RAW", uidRaw)
-				stdID := userId
-				VarSetValueStr(ctx, "$t帐号ID", stdID)
-				VarSetValueStr(ctx, "$t账号ID", stdID)
-				text := DiceFormat(ctx, group.GroupWelcomeMessage)
-				for _, i := range ctx.SplitText(text) {
-					doSleepQQ(ctx)
-					p.SendToGroup(ctx, msg.GroupID, strings.TrimSpace(i), "")
-				}
-			}
+			session.OnGroupMemberJoined(ctx, msg)
 		})
 	}
 
@@ -359,11 +325,15 @@ func (p *PlatformAdapterOnebot) handleReqGroupAction(req gjson.Result, _ *evsock
 			}
 		}
 		// 先判断是否需要加群
+		txt := fmt.Sprintf("收到QQ加群邀请: 群组<%s>(%s) 邀请人:<%s>(%s)", res.GroupName, res.GroupId, userName, diceUserId)
+		p.logger.Info(txt)
+		ctx.Notice(txt, NoticeTypeInvite)
+
 		ok, reason := checkPassBlackListGroup(diceUserId, diceGroupId, ctx)
 		if !ok {
 			p.logger.Infof("群组 %s 加群请求被拒绝，原因为 %s", req.Get("group_id").String(), reason)
 			err := p.submitAsync(func() {
-				err := p.sendEmitter.SetGroupAddRequest(p.ctx, req.Get("flag").String(), false, reason)
+				err := p.sendEmitter.SetGroupAddRequest(p.ctx, req.Get("flag").String(), req.Get("sub_type").String(), false, reason)
 				if err != nil {
 					p.logger.Errorf("处理加群请求时发送消息失败 %s", err)
 				}
@@ -375,10 +345,7 @@ func (p *PlatformAdapterOnebot) handleReqGroupAction(req gjson.Result, _ *evsock
 		}
 		// 没问题，加群
 		_ = p.submitAsync(func() {
-			txt := fmt.Sprintf("收到QQ加群邀请: 群组<%s>(%s) 邀请人:<%s>(%s)", res.GroupName, res.GroupId, userName, diceUserId)
-			p.logger.Info(txt)
-			ctx.Notice(txt, NoticeTypeInvite)
-			err := p.sendEmitter.SetGroupAddRequest(p.ctx, req.Get("flag").String(), true, "")
+			err := p.sendEmitter.SetGroupAddRequest(p.ctx, req.Get("flag").String(), req.Get("sub_type").String(), true, "")
 			if err != nil {
 				p.logger.Errorf("处理加群请求时发送消息失败 %s", err)
 			}
@@ -404,6 +371,20 @@ func checkPassBlackListGroup(inviterID string, groupID string, ctx *MsgContext) 
 func (p *PlatformAdapterOnebot) handleReqFriendAction(req gjson.Result, _ *evsocket.EventPayload) error {
 	// 只有一种情况 就是好友添加
 	// 获取请求详情
+	flag := req.Get("flag").String()
+	userID := req.Get("user_id").String()
+	if flag != "" {
+		cache, err := p.ensureFriendRequestDedupeCache()
+		if err != nil {
+			p.logger.Warnf("好友申请去重缓存不可用，跳过去重: flag=%s user_id=%s err=%v", flag, userID, err)
+		} else {
+			if _, exists := cache.Get(flag); exists {
+				p.logger.Infof("重复好友申请已跳过: flag=%s user_id=%s", flag, userID)
+				return nil
+			}
+			cache.Set(flag, struct{}{})
+		}
+	}
 	var comment string
 	if req.Get("comment").Exists() {
 		comment = normalizeOnebotFriendRequestComment(req.Get("comment").String())
@@ -942,9 +923,10 @@ func convertSealMsgToMessageChain(msg []message.IMessageElement) (schema.Message
 			if !ok {
 				continue
 			}
-			fileVal := res.File
+			// URL 保存可直接发送的完整资源引用；File 对本地文件通常只有文件名。
+			fileVal := res.URL
 			if fileVal == "" {
-				fileVal = res.URL
+				fileVal = res.File
 			}
 			if fileVal == "" {
 				continue
