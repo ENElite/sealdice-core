@@ -1,0 +1,88 @@
+name: Sync admin with upstream master
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 4 * * *'
+      timezone: 'Asia/Shanghai'
+
+permissions:
+  actions: write
+  contents: write
+
+concurrency:
+  group: sync-admin-with-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Merge, verify, and push
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout admin
+        uses: actions/checkout@v6
+        with:
+          ref: admin
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Fetch upstream
+        shell: bash
+        run: |
+          git remote add upstream https://github.com/sealdice/sealdice-core.git
+          git fetch --no-tags upstream master
+
+      - name: Merge upstream/master
+        id: merge
+        shell: bash
+        run: |
+          if git merge-base --is-ancestor upstream/master HEAD; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "admin already contains the latest upstream/master"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git merge --no-edit upstream/master
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Go
+        if: steps.merge.outputs.changed == 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Test merged result
+        if: steps.merge.outputs.changed == 'true'
+        shell: bash
+        run: |
+          go mod download
+          go generate ./...
+          git diff --exit-code
+          go test -race ./...
+          go vet ./...
+
+      - name: Lint merged result
+        if: steps.merge.outputs.changed == 'true'
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: latest
+          args: '--timeout 10m'
+
+      - name: Push admin
+        if: steps.merge.outputs.changed == 'true'
+        shell: bash
+        run: git push origin HEAD:admin
+
+      - name: Trigger Docker build
+        if: steps.merge.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: gh workflow run docker-image.yml --ref admin
