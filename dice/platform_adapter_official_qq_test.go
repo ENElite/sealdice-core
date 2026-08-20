@@ -30,7 +30,7 @@ func (f officialQQTransportFunc) Transport(ctx context.Context, method, url stri
 func TestServerOfficialQQSkipsRunningSessionBeforeStateChange(t *testing.T) {
 	t.Parallel()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	conn := &PlatformAdapterOfficialQQ{Ctx: ctx}
@@ -141,7 +141,7 @@ func TestGetOfficialQQBotInfoUsesShareURL(t *testing.T) {
 		}`), nil
 	})
 
-	botInfo, err := getOfficialQQBotInfo(context.Background(), api)
+	botInfo, err := getOfficialQQBotInfo(t.Context(), api)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,7 @@ func TestGetOfficialQQBotInfoGeneratedLinkFallback(t *testing.T) {
 		}
 	})
 
-	botInfo, err := getOfficialQQBotInfo(context.Background(), api)
+	botInfo, err := getOfficialQQBotInfo(t.Context(), api)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -297,8 +297,8 @@ func TestOfficialQQDelegatedContextKeepsRawMentionTarget(t *testing.T) {
 	if delegatedCtx.Player.UserID != canonicalUserID {
 		t.Fatalf("delegated user ID = %q, want %q", delegatedCtx.Player.UserID, canonicalUserID)
 	}
-	if delegatedCtx.Player.Name != "<@"+memberOpenID+">" {
-		t.Fatalf("delegated mention name = %q, want raw MemberOpenID", delegatedCtx.Player.Name)
+	if delegatedCtx.Player.Name != formatOfficialQQAtUser(memberOpenID) {
+		t.Fatalf("delegated mention name = %q, want qqbot-at-user with raw MemberOpenID", delegatedCtx.Player.Name)
 	}
 }
 
@@ -895,6 +895,13 @@ func TestOfficialQQIdentityMigration(t *testing.T) {
 		t.Fatalf("re-added endpoint command count = %d, want 12", endpoint.CmdExecutedNum)
 	}
 	assertOfficialQQMigrationRow(t, db, &model.LogInfo{}, "group_id = ?", newGroupID)
+	var migratedLogInfo model.LogInfo
+	if err := db.Where("group_id = ?", newGroupID).First(&migratedLogInfo).Error; err != nil {
+		t.Fatal(err)
+	}
+	if migratedLogInfo.UpdatedAt != timestamp {
+		t.Fatalf("migrated log updated_at = %d, want %d", migratedLogInfo.UpdatedAt, timestamp)
+	}
 	assertOfficialQQMigrationRow(t, db, &model.LogOneItem{}, "group_id = ? AND im_userid = ?", newGroupID, newUserID)
 	assertOfficialQQMigrationRow(t, db, &model.CensorLog{}, "group_id = ? AND user_id = ?", newGroupID, newUserID)
 	assertOfficialQQMigrationRow(t, db, &model.BanInfo{}, "id = ?", newUserID)
