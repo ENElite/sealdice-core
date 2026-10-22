@@ -25,7 +25,7 @@ import (
 	"github.com/google/uuid"
 	qqconstant "github.com/sealdice/botgo/constant"
 	"github.com/sealdice/botgo/event"
-	"github.com/sealdice/botgo/interaction/signature"
+	qqwebhook "github.com/sealdice/botgo/interaction/webhook"
 	"github.com/skip2/go-qrcode"
 
 	qqbot "github.com/sealdice/botgo"
@@ -497,7 +497,9 @@ func (pa *PlatformAdapterOfficialQQ) connect(probe *OfficialQQAccountProbeResult
 		}
 
 		mux := http.NewServeMux()
-		mux.HandleFunc(pa.WebhookPath, pa.handleWebhookCallback)
+		mux.Handle(pa.WebhookPath, newOfficialQQWebhookHandler(pa, func(err error) {
+			log.Errorf("official qq webhook 处理失败: %v", err)
+		}))
 
 		addr := fmt.Sprintf(":%d", pa.WebhookPort)
 		pa.webhookServer = &http.Server{
@@ -561,6 +563,8 @@ func (pa *PlatformAdapterOfficialQQ) connect(probe *OfficialQQAccountProbeResult
 		intent |= dto.IntentGroupMembers
 	}
 
+	log.Info("official qq WebSocket 正在建立；QQ 官方可能约每小时要求一次连接续期，自动重连属于正常现象")
+
 	go func() {
 		currentCtx := ctx
 		defer func() {
@@ -593,7 +597,7 @@ func (pa *PlatformAdapterOfficialQQ) connect(probe *OfficialQQAccountProbeResult
 	pa.clearQrLoginState()
 	d.LastUpdatedTime = time.Now().Unix()
 	d.Save(false)
-	log.Info("official qq 连接成功")
+	log.Info("official qq 连接成功（WebSocket）；QQ 官方续期重连会自动恢复，不需要手动重启")
 	return 0
 }
 
@@ -2725,74 +2729,21 @@ func (pa *PlatformAdapterOfficialQQ) ServeWebhook() int {
 	return pa.Serve()
 }
 
-// handleWebhookCallback 处理Webhook回调
-func (pa *PlatformAdapterOfficialQQ) handleWebhookCallback(w http.ResponseWriter, r *http.Request) {
-	s := pa.EndPoint.Session
-	log := s.Parent.Logger
-
-	// 读取请求
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		log.Error("official qq webhook: 读取请求失败: ", err)
-		w.WriteHeader(http.StatusBadRequest)
-		return
+// newOfficialQQWebhookHandler 使用 botgo 的 webhook handler 处理回调。
+// 它会在验签前处理 op=13 回调地址校验，并统一处理 op=1 心跳、op=12 ACK、
+// 事件去重/panic 隔离以及异步处理。
+func newOfficialQQWebhookHandler(pa *PlatformAdapterOfficialQQ, onError func(error)) http.Handler {
+	options := qqwebhook.HandlerOptions{
+		Credentials: &qqtoken.QQBotCredentials{
+			AppID:     pa.AppID,
+			AppSecret: pa.AppSecret,
+		},
+		AckMode: qqwebhook.AckAsync,
 	}
-	defer r.Body.Close()
-
-	// 签名验证
-	if !pa.verifyWebhookSignature(body, r.Header) {
-		log.Error("official qq webhook: 签名验证失败")
-		w.WriteHeader(http.StatusUnauthorized)
-		return
+	if onError != nil {
+		options.ErrorHandler = onError
 	}
-
-	log.Debugf("official qq webhook: 收到请求 %s", string(body))
-
-	// 解析事件
-	var payload dto.WSPayload
-	if err := json.Unmarshal(body, &payload); err != nil {
-		log.Error("official qq webhook: 解析事件失败: ", err)
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
-
-	// 保存原始消息数据，ParseAndHandle 使用
-	payload.RawMessage = body
-	payload.Session = &dto.Session{AppID: pa.AppID}
-
-	// 响应确认
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	response := map[string]interface{}{
-		"op": 12, // HTTP回调确认
-	}
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		log.Error("official qq webhook: 响应确认失败: ", err)
-	}
-
-	// 异步处理事件
-	go func() {
-		defer func() {
-			if rec := recover(); rec != nil {
-				log.Errorf("official qq webhook: 处理事件异常: %v", rec)
-			}
-		}()
-		if err := event.ParseAndHandle(&payload); err != nil {
-			log.Errorf("official qq webhook: 事件处理失败: %v", err)
-		}
-	}()
-}
-
-// verifyWebhookSignature 验证Webhook签名
-func (pa *PlatformAdapterOfficialQQ) verifyWebhookSignature(body []byte, header http.Header) bool {
-	if pa.AppSecret == "" {
-		return true
-	}
-	pass, err := signature.Verify(pa.AppSecret, header, body)
-	if err != nil {
-		return false
-	}
-	return pass
+	return qqwebhook.NewHandler(options)
 }
 
 type C2CRichMediaMessage struct {
@@ -3156,6 +3107,19 @@ func qqBotHttpPost(url string, body []byte) ([]byte, error) {
 	return io.ReadAll(resp.Body)
 }
 
+func removeOfficialQQEndpoint(session *IMSession, target *EndPointInfo) {
+	if session == nil || target == nil {
+		return
+	}
+	next := make([]*EndPointInfo, 0, len(session.EndPoints))
+	for _, ep := range session.EndPoints {
+		if ep != target {
+			next = append(next, ep)
+		}
+	}
+	session.EndPoints = next
+}
+
 func (pa *PlatformAdapterOfficialQQ) failQrLogin(logMsg string, err error) {
 	ep := pa.EndPoint
 	d := ep.Session.Parent
@@ -3165,6 +3129,10 @@ func (pa *PlatformAdapterOfficialQQ) failQrLogin(logMsg string, err error) {
 	} else {
 		log.Error(logMsg)
 	}
+	// 扫码流程失败后必须清掉 Ctx，否则 SetEnable/Serve 会认为会话仍在运行，
+	// 导致后续点击“启用”只改状态而不真正启动连接。
+	pa.stopSessionContext()
+	pa.DiceServing = false
 	pa.markQrLoginFailed()
 	ep.State = 3
 	ep.Enable = false
@@ -3297,12 +3265,15 @@ func (pa *PlatformAdapterOfficialQQ) serveQrLogin(source string) {
 					pa.UIN = ""
 					ep.UserID = ""
 					ep.Nickname = ""
+					pa.stopSessionContext()
+					pa.DiceServing = false
 					pa.markQrLoginFailed()
 					ep.State = 3
 					ep.Enable = false
+					removeOfficialQQEndpoint(d.ImSession, ep)
 					d.LastUpdatedTime = time.Now().Unix()
 					d.Save(false)
-					log.Infof("official qq 临时扫码端点已禁用: UIN=%s temporaryID=%s", probe.UIN, ep.ID)
+					log.Infof("official qq 临时扫码端点已移除: UIN=%s temporaryID=%s", probe.UIN, ep.ID)
 					return
 				}
 

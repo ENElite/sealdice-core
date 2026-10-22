@@ -116,6 +116,15 @@ func DiceConfigSet(c echo.Context) error {
 		return c.JSON(http.StatusOK, nil)
 	}
 
+	if val, ok := jsonMap["diceRandomMode"]; ok {
+		if v, ok := val.(string); ok && strings.EqualFold(strings.TrimSpace(v), string(dice.DiceRandomModeGM)) && !myDice.Config.DiceRandomGMEnabled {
+			return c.JSON(http.StatusBadRequest, Response{
+				"result": false,
+				"err":    "国密源默认禁用。请先在基本设置中确认启用国密源，或使用 .randalgo set gm 完成二次确认。",
+			})
+		}
+	}
+
 	trayTooltip := ""
 	trayTooltipModified := false
 	if val, ok := jsonMap["trayTooltip"]; ok {
@@ -456,6 +465,25 @@ func DiceConfigSet(c echo.Context) error {
 
 	if val, ok := jsonMap["officialQQUseMarkdown"]; ok {
 		config.OfficialQQUseMarkdown = val.(bool)
+	}
+
+	if val, ok := jsonMap["officialQQUseNameCard"]; ok {
+		config.OfficialQQUseNameCard = val.(bool)
+	}
+	if val, ok := jsonMap["officialQQUseNameCardTemplate"]; ok {
+		if text, ok := val.(string); ok {
+			text = strings.TrimSpace(text)
+			if utf8.RuneCountInString(text) > dice.MaxOfficialQQNameCardTemplateRunes {
+				return c.JSON(http.StatusBadRequest, Response{
+					"result": false,
+					"err":    "名片渲染模板不能超过" + strconv.Itoa(dice.MaxOfficialQQNameCardTemplateRunes) + "个字符",
+				})
+			}
+			config.OfficialQQNameCardTmpl = text
+		}
+	}
+	if !config.OfficialQQUseMarkdown {
+		config.OfficialQQUseNameCard = false
 	}
 
 	if val, ok := jsonMap["officialQQEnableIdentityMigration"]; ok {
