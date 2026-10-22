@@ -1,6 +1,6 @@
 module sealdice-core
 
-go 1.25.0
+go 1.25.14
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
@@ -9,7 +9,7 @@ require (
 	github.com/PaienNate/pineutil v1.1.1
 	github.com/ShiraazMoollatjie/goluhn v0.0.0-20211017190329-0d86158c056a
 	github.com/Szzrain/DingTalk-go v0.0.8-alpha
-	github.com/Szzrain/Milky-go-sdk v1.1.0
+	github.com/Szzrain/Milky-go-sdk v1.2.0
 	github.com/Szzrain/dodo-open-go v0.2.8
 	github.com/acarl005/stripansi v0.0.0-20180116102854-5a71ef0e047d
 	github.com/alexmullins/zip v0.0.0-20180717182244-4affb64b04d0
@@ -23,7 +23,7 @@ require (
 	github.com/dop251/goja v0.0.0-20260216154549-8b74ce4618c5
 	github.com/dop251/goja_nodejs v0.0.0-20250409162600-f7acab6894b0
 	github.com/evanw/esbuild v0.27.1
-	github.com/fy0/bluge v0.0.0-20260713113642-38c63a5ebb28
+	github.com/fy0/bluge v0.8.0
 	github.com/fy0/go-autostart v0.0.0-20220515100644-a25d81ed766b
 	github.com/fy0/gojax v0.0.0-20221225152702-4140cf8509bd
 	github.com/fy0/systray v1.2.2
@@ -54,7 +54,6 @@ require (
 	github.com/mitchellh/mapstructure v1.5.0
 	github.com/monaco-io/request v1.0.16
 	github.com/mozillazg/go-pinyin v0.21.0
-	github.com/mroth/weightedrand/v3 v3.0.0
 	github.com/ncruces/go-sqlite3 v0.32.0
 	github.com/ncruces/go-sqlite3/gormlite v0.24.0
 	github.com/oklog/ulid/v2 v2.1.2
@@ -71,7 +70,7 @@ require (
 	github.com/sahilm/fuzzy v0.1.1
 	github.com/samber/lo v1.52.0
 	github.com/schollz/progressbar/v3 v3.19.1
-	github.com/sealdice/botgo v0.0.0-20260724133029-df949851f30b
+	github.com/sealdice/botgo v0.0.0-20261021133756-7994a476e417
 	github.com/sealdice/dicescript v0.0.0-20260729052003-c4c99fe00cb6
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/slack-go/slack v0.17.3
@@ -87,12 +86,12 @@ require (
 	go.etcd.io/bbolt v1.4.3
 	go.uber.org/goleak v1.3.0
 	go.uber.org/zap v1.27.0
-	golang.org/x/crypto v0.54.0
-	golang.org/x/exp v0.0.0-20250911091902-df9299821621
-	golang.org/x/oauth2 v0.30.0
+	golang.org/x/crypto v0.55.0
+	golang.org/x/exp v0.0.0-20260611194520-c48552f49976
+	golang.org/x/oauth2 v0.36.0
 	golang.org/x/sync v0.22.0
 	golang.org/x/sys v0.47.0
-	golang.org/x/text v0.40.0
+	golang.org/x/text v0.41.0
 	golang.org/x/time v0.15.0
 	gopkg.in/elazarl/goproxy.v1 v1.0.0-20180725130230-947c36da3153
 	gopkg.in/gomail.v2 v2.0.0-20160411212932-81ebce5c23df
@@ -107,8 +106,11 @@ require (
 require github.com/mark3labs/mcp-go v0.38.0
 
 require (
+	github.com/blevesearch/mmap-go v1.2.0
 	github.com/emmansun/gmsm v0.44.1
+	github.com/klauspost/compress v1.18.0
 	github.com/sixafter/aes-ctr-drbg v1.16.0
+	github.com/tus/tusd/v2 v2.10.1
 )
 
 require (
@@ -123,7 +125,6 @@ require (
 	github.com/bits-and-blooms/bloom/v3 v3.7.0 // indirect
 	github.com/blevesearch/bleve_index_api v1.4.0 // indirect
 	github.com/blevesearch/go-porterstemmer v1.0.3 // indirect
-	github.com/blevesearch/mmap-go v1.2.0 // indirect
 	github.com/blevesearch/scorch_segment_api/v2 v2.4.8 // indirect
 	github.com/blevesearch/segment v0.9.1 // indirect
 	github.com/blevesearch/snowballstem v0.9.0 // indirect
@@ -132,11 +133,13 @@ require (
 	github.com/bytedance/gopkg v0.1.3 // indirect
 	github.com/bytedance/sonic/loader v0.5.1 // indirect
 	github.com/caio/go-tdigest/v4 v4.1.0 // indirect
+	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/cloudwego/base64x v0.1.6 // indirect
 	github.com/dgryski/go-metro v0.0.0-20250106013310-edb8663e5e33 // indirect
 	github.com/dlclark/regexp2 v1.11.5 // indirect
 	github.com/dolthub/maphash v0.1.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/ebitengine/purego v0.10.1 // indirect
 	github.com/elazarl/goproxy v0.0.0-20230808193330-2592e75ae04a // indirect
 	github.com/elazarl/goproxy/ext v0.0.0-20230808193330-2592e75ae04a // indirect
 	github.com/esiqveland/notify v0.13.3 // indirect
@@ -160,7 +163,7 @@ require (
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/golang/snappy v1.0.0 // indirect
-	github.com/google/pprof v0.0.0-20260202012954-cb029daf43ef // indirect
+	github.com/google/pprof v0.0.0-20260604005048-7023385849c0 // indirect
 	github.com/hhrutter/lzw v1.0.0 // indirect
 	github.com/hhrutter/pkcs7 v0.2.0 // indirect
 	github.com/hhrutter/tiff v1.0.2 // indirect
@@ -170,17 +173,16 @@ require (
 	github.com/jackc/pgx/v5 v5.9.2 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/jackmordaunt/icns/v3 v3.0.1 // indirect
+	github.com/jellydator/ttlcache/v3 v3.1.0 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jinzhu/now v1.1.5 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/kamstrup/intmap v0.5.2 // indirect
-	github.com/klauspost/compress v1.18.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.10 // indirect
-	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/labstack/gommon v0.4.2 // indirect
-	github.com/lxzan/gws v1.9.1 // indirect
+	github.com/lxzan/gws v1.10.2 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
-	github.com/mattn/go-colorable v0.1.14 // indirect
+	github.com/mattn/go-colorable v0.1.15 // indirect
 	github.com/mattn/go-isatty v0.0.22 // indirect
 	github.com/mattn/go-runewidth v0.0.16 // indirect
 	github.com/mitchellh/colorstring v0.0.0-20190213212951-d06e56a500db // indirect
@@ -227,11 +229,11 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/arch v0.21.0 // indirect
 	golang.org/x/image v0.41.0 // indirect
-	golang.org/x/mod v0.37.0 // indirect
-	golang.org/x/net v0.57.0 // indirect
+	golang.org/x/mod v0.38.0 // indirect
+	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/term v0.45.0 // indirect
 	google.golang.org/appengine v1.6.8 // indirect
-	google.golang.org/protobuf v1.36.11 // indirect
+	google.golang.org/protobuf v1.36.12 // indirect
 	gopkg.in/alexcesaro/quotedprintable.v3 v3.0.0-20150716171945-2caba252f4dc // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	modernc.org/libc v1.22.5 // indirect

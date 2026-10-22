@@ -14,7 +14,7 @@ import (
 // ConfigVersion 当前设置版本
 const (
 	ConfigVersion     = 1
-	ConfigVersionCode = 10300 // 旧的设置版本标记
+	ConfigVersionCode = 10301 // 旧的设置版本标记
 )
 
 type Config struct {
@@ -145,13 +145,15 @@ type BaseConfig struct {
 	MessageDelayRangeStart   float64    `json:"messageDelayRangeStart"  yaml:"messageDelayRangeStart"`  // 指令延迟区间
 	MessageDelayRangeEnd     float64    `json:"messageDelayRangeEnd"    yaml:"messageDelayRangeEnd"`
 	WorkInQQChannel          bool       `json:"workInQQChannel"         yaml:"workInQQChannel"`
-	QQChannelAutoOn          bool       `json:"QQChannelAutoOn"         yaml:"QQChannelAutoOn"`           // QQ频道中自动开启(默认不开)
-	QQChannelLogMessage      bool       `json:"QQChannelLogMessage"     yaml:"QQChannelLogMessage"`       // QQ频道中记录消息(默认不开)
-	QQEnablePoke             bool       `json:"QQEnablePoke"            yaml:"QQEnablePoke"`              // 启用戳一戳
-	OfficialQQFileSendBase64 bool       `json:"officialQQFileSendBase64" yaml:"officialQQFileSendBase64"` // 是否使用base64发送本地/非公网文件
-	OfficialQQUseMarkdown    bool       `json:"officialQQUseMarkdown"    yaml:"officialQQUseMarkdown"`    // 是否自动把消息全转为markdown类型消息
-	TextCmdTrustOnly         bool       `json:"textCmdTrustOnly"        yaml:"textCmdTrustOnly"`          // 只允许信任用户或master使用text指令
-	IgnoreUnaddressedBotCmd  bool       `json:"ignoreUnaddressedBotCmd" yaml:"ignoreUnaddressedBotCmd"`   // 不响应群聊裸bot指令
+	QQChannelAutoOn          bool       `json:"QQChannelAutoOn"         yaml:"QQChannelAutoOn"`                     // QQ频道中自动开启(默认不开)
+	QQChannelLogMessage      bool       `json:"QQChannelLogMessage"     yaml:"QQChannelLogMessage"`                 // QQ频道中记录消息(默认不开)
+	QQEnablePoke             bool       `json:"QQEnablePoke"            yaml:"QQEnablePoke"`                        // 启用戳一戳
+	OfficialQQFileSendBase64 bool       `json:"officialQQFileSendBase64" yaml:"officialQQFileSendBase64"`           // 是否使用base64发送本地/非公网文件
+	OfficialQQUseMarkdown    bool       `json:"officialQQUseMarkdown"    yaml:"officialQQUseMarkdown"`              // 是否自动把消息全转为markdown类型消息
+	OfficialQQUseNameCard    bool       `json:"officialQQUseNameCard"    yaml:"officialQQUseNameCard"`              // 是否在官方QQ回复顶部显示玩家.sn名片，需要同时启用Markdown
+	OfficialQQNameCardTmpl   string     `json:"officialQQUseNameCardTemplate" yaml:"officialQQUseNameCardTemplate"` // 名片渲染模板，{card} 为名片内容占位符
+	TextCmdTrustOnly         bool       `json:"textCmdTrustOnly"        yaml:"textCmdTrustOnly"`                    // 只允许信任用户或master使用text指令
+	IgnoreUnaddressedBotCmd  bool       `json:"ignoreUnaddressedBotCmd" yaml:"ignoreUnaddressedBotCmd"`             // 不响应群聊裸bot指令
 	UILogLimit               int64      `json:"-"                       yaml:"UILogLimit"`
 	FriendAddComment         string     `json:"friendAddComment"        yaml:"friendAddComment"` // 加好友验证信息
 	CustomReplyConfigEnable  bool       `json:"customReplyConfigEnable" yaml:"customReplyConfigEnable"`
@@ -167,6 +169,7 @@ type BaseConfig struct {
 	ReplyDebugMode           bool       `json:"replyDebugMode"          yaml:"replyDebugMode"`       // 回复调试
 	PlayerNameWrapEnable     bool       `json:"playerNameWrapEnable"    yaml:"playerNameWrapEnable"` // 启用玩家名称外框
 	DiceRandomMode           string     `json:"diceRandomMode"          yaml:"diceRandomMode"`       // 骰点随机模式
+	DiceRandomGMEnabled      bool       `json:"diceRandomGMEnabled"     yaml:"diceRandomGMEnabled"`  // 是否启用国密随机源（约占 32MB 常驻内存）
 
 	VMVersionForReply      string `json:"VMVersionForReply"      yaml:"VMVersionForReply"`      // 自定义回复使用的vm版本
 	VMVersionForDeck       string `json:"VMVersionForDeck"       yaml:"VMVersionForDeck"`       // 牌堆使用的vm版本
