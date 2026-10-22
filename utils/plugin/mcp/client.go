@@ -238,5 +238,4 @@ func Enable(rt *goja.Runtime) {
 	// _ = mcp.Set("Server", nil) // 服务器端功能未实现
 
 	_ = rt.Set("mcp", mcp)
-
 }

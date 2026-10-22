@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	io "io"
 	"math/rand"
+	http "net/http"
 	url "net/url"
 	"os"
 	"path/filepath"
@@ -13,8 +15,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	http "net/http"
-	io "io"
 
 	"sealdice-core/message"
 	"sealdice-core/utils"
@@ -808,7 +808,7 @@ func textAssetsConvert(s string) string {
 			fn := m[2] // 拿到:后面的(.+?)
 			if strings.HasPrefix(fn, "http://") || strings.HasPrefix(fn, "https://") {
 				i := strings.Index(fn, "?")
-				
+
 				base := fn
 				if i != -1 {
 					base = fn[:i]
@@ -820,7 +820,7 @@ func textAssetsConvert(s string) string {
 				}
 				// 不对path进行编码
 				// u.Path = url.PathEscape(u.Path)
-				
+
 				// 仅对query进行编码
 				if i != -1 {
 					q := url.Values{}
@@ -835,7 +835,7 @@ func textAssetsConvert(s string) string {
 
 					u.RawQuery = q.Encode()
 				}
-				
+
 				response, err := http.Get(u.String())
 				if err != nil {
 					return "[URL请求失败]"
