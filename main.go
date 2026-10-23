@@ -29,6 +29,7 @@ import (
 	"go.uber.org/zap/zapcore"
 
 	"sealdice-core/api"
+	"sealdice-core/api/mcpserver"
 	apiv2 "sealdice-core/api/v2"
 	"sealdice-core/dice"
 	"sealdice-core/dice/service"
@@ -741,6 +742,7 @@ func uiServe(dm *dice.DiceManager, hideUI bool, useBuiltinOldUI bool, enablePPro
 
 	apier := humaecho.New(e, huma.DefaultConfig("Sealdice API", "2.0.0"))
 	realtimeServer := apiv2.InitV2Router(apier, dm)
+	mcpserver.Bind(e, apier, dm)
 	if realtimeServer != nil {
 		realtimeServer.Start(context.Background())
 		defer realtimeServer.Close()
