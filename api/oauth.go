@@ -56,8 +56,8 @@ func bindOAuthRoutes(e *echo.Echo, manager *dice.DiceManager) {
 }
 func (s *oauthServer) load() {
 	if data, err := os.ReadFile(s.file); err == nil {
-		if err := json.Unmarshal(data, &s.config); err != nil {
-			log.Printf("OAuth configuration is invalid: %v", err)
+		if decodeErr := json.Unmarshal(data, &s.config); decodeErr != nil {
+			log.Printf("OAuth configuration is invalid: %v", decodeErr)
 			s.config = oauthConfig{}
 		}
 		if s.config.ClientID != "" && !oauthConfigValid(s.config) {
@@ -119,7 +119,7 @@ func (s *oauthServer) persist(config oauthConfig) error {
 	if err := os.MkdirAll(filepath.Dir(s.file), 0700); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(config, "", "  ")
+	data, err := json.MarshalIndent(config, "", "  ") // #nosec G117 -- OAuth needs this secret on restart; only the private 0600 config file receives it.
 	if err != nil {
 		return err
 	}
@@ -157,14 +157,14 @@ func (s *oauthServer) setConfig(c echo.Context) error {
 		return echo.ErrBadRequest
 	}
 	if s.dm.UIPasswordHash == "" {
-		return echo.NewHTTPError(400, "请先设置 WebUI 密码")
+		return echo.NewHTTPError(http.StatusBadRequest, "请先设置 WebUI 密码")
 	}
 	if !oauthValidateURL(config.AuthorizationURL) || !oauthValidateURL(config.TokenURL) || !oauthValidateURL(config.UserinfoURL) || !oauthValidateURL(config.RedirectURL) || strings.TrimSpace(config.ClientID) == "" {
-		return echo.NewHTTPError(400, "OAuth URL 或 client ID 无效；仅允许 HTTPS（本机测试可用 HTTP）")
+		return echo.NewHTTPError(http.StatusBadRequest, "OAuth URL 或 client ID 无效；仅允许 HTTPS（本机测试可用 HTTP）")
 	}
 	callback, _ := url.Parse(config.RedirectURL)
 	if callback.Path != oauthPath+"/callback" || callback.RawQuery != "" {
-		return echo.NewHTTPError(400, "回调路径必须为 /sd-api/oauth/callback")
+		return echo.NewHTTPError(http.StatusBadRequest, "回调路径必须为 /sd-api/oauth/callback")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -173,7 +173,7 @@ func (s *oauthServer) setConfig(c echo.Context) error {
 	}
 	config.Subject = "" // A changed provider must always be bound again.
 	if err := s.persist(config); err != nil {
-		return echo.NewHTTPError(500, "OAuth 配置保存失败")
+		return echo.NewHTTPError(http.StatusInternalServerError, "OAuth 配置保存失败")
 	}
 	return c.NoContent(http.StatusNoContent)
 }
@@ -189,9 +189,9 @@ func (s *oauthServer) unbind(c echo.Context) error {
 	config := s.config
 	config.Subject = ""
 	if err := s.persist(config); err != nil {
-		return echo.NewHTTPError(500, "解绑保存失败")
+		return echo.NewHTTPError(http.StatusInternalServerError, "解绑保存失败")
 	}
-	return c.NoContent(204)
+	return c.NoContent(http.StatusNoContent)
 }
 func (s *oauthServer) bind(c echo.Context) error {
 	if !s.authorized(c) {
@@ -231,12 +231,12 @@ func (s *oauthServer) start(c echo.Context, admin string) error {
 		}
 	}
 	if len(s.pending) >= 1024 {
-		return echo.NewHTTPError(429, "too many OAuth requests")
+		return echo.NewHTTPError(http.StatusTooManyRequests, "too many OAuth requests")
 	}
 	state, browser, verifier := oauthRandom(), oauthRandom(), oauthRandom()
 	s.pending[state] = oauthTransaction{browser: browser, verifier: verifier, admin: admin, expires: now.Add(5 * time.Minute), config: s.config}
 	callback, _ := url.Parse(s.config.RedirectURL)
-	c.SetCookie(&http.Cookie{Name: oauthCookie, Value: browser, Path: oauthPath, HttpOnly: true, Secure: callback.Scheme == "https", SameSite: http.SameSiteLaxMode, MaxAge: 300})
+	c.SetCookie(&http.Cookie{Name: oauthCookie, Value: browser, Path: oauthPath, HttpOnly: true, Secure: callback.Scheme == "https", SameSite: http.SameSiteLaxMode, MaxAge: 300}) // #nosec G124 -- HTTPS always sets Secure; validated loopback HTTP callbacks are allowed for local OAuth tests.
 	u, _ := url.Parse(s.config.AuthorizationURL)
 	q := u.Query()
 	challenge := sha256.Sum256([]byte(verifier))
@@ -248,7 +248,7 @@ func (s *oauthServer) start(c echo.Context, admin string) error {
 	q.Set("code_challenge_method", "S256")
 	q.Set("code_challenge", base64.RawURLEncoding.EncodeToString(challenge[:]))
 	u.RawQuery = q.Encode()
-	return c.JSON(200, map[string]string{"url": u.String()})
+	return c.JSON(http.StatusOK, map[string]string{"url": u.String()})
 }
 func (s *oauthServer) exchange(c echo.Context, tx oauthTransaction) (string, error) {
 	form := url.Values{"grant_type": {"authorization_code"}, "code": {c.QueryParam("code")}, "redirect_uri": {tx.config.RedirectURL}, "client_id": {tx.config.ClientID}, "client_secret": {tx.config.ClientSecret}, "code_verifier": {tx.verifier}}
@@ -266,7 +266,7 @@ func (s *oauthServer) exchange(c echo.Context, tx oauthTransaction) (string, err
 		AccessToken string `json:"access_token"`
 		TokenType   string `json:"token_type"`
 	}
-	if res.StatusCode != 200 || json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&token) != nil || token.AccessToken == "" || !strings.EqualFold(token.TokenType, "Bearer") {
+	if res.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&token) != nil || token.AccessToken == "" || !strings.EqualFold(token.TokenType, "Bearer") {
 		return "", errors.New("token exchange failed")
 	}
 	req, err = http.NewRequestWithContext(c.Request().Context(), http.MethodGet, tx.config.UserinfoURL, nil)
@@ -282,7 +282,7 @@ func (s *oauthServer) exchange(c echo.Context, tx oauthTransaction) (string, err
 	var identity struct {
 		Subject string `json:"sub"`
 	}
-	if user.StatusCode != 200 || json.NewDecoder(io.LimitReader(user.Body, 1<<20)).Decode(&identity) != nil || identity.Subject == "" || len(identity.Subject) > 512 {
+	if user.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(user.Body, 1<<20)).Decode(&identity) != nil || identity.Subject == "" || len(identity.Subject) > 512 {
 		return "", errors.New("userinfo failed")
 	}
 	return identity.Subject, nil
@@ -301,32 +301,32 @@ func (s *oauthServer) callback(c echo.Context) error {
 	s.mu.Unlock()
 	cookie, err := c.Cookie(oauthCookie)
 	if !ok || err != nil || cookie.Value != tx.browser || time.Now().After(tx.expires) || c.QueryParam("error") != "" || c.QueryParam("code") == "" {
-		return oauthFailure(c, 403, "OAuth 登录失败或已过期，请重新发起")
+		return oauthFailure(c, http.StatusForbidden, "OAuth 登录失败或已过期，请重新发起")
 	}
-	c.SetCookie(&http.Cookie{Name: oauthCookie, Value: "", Path: oauthPath, HttpOnly: true, MaxAge: -1, SameSite: http.SameSiteLaxMode})
+	c.SetCookie(&http.Cookie{Name: oauthCookie, Value: "", Path: oauthPath, HttpOnly: true, Secure: strings.HasPrefix(tx.config.RedirectURL, "https://"), MaxAge: -1, SameSite: http.SameSiteLaxMode}) // #nosec G124 -- Clear with the same transport policy: Secure on HTTPS, loopback HTTP only for local tests.
 	subject, err := s.exchange(c, tx)
 	if err != nil {
-		return oauthFailure(c, 403, "OAuth 第三方登录失败")
+		return oauthFailure(c, http.StatusForbidden, "OAuth 第三方登录失败")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if tx.config != s.config || s.dm.UIPasswordHash == "" {
-		return oauthFailure(c, 403, "OAuth 配置或管理员会话已失效")
+		return oauthFailure(c, http.StatusForbidden, "OAuth 配置或管理员会话已失效")
 	}
 	if tx.admin != "" {
 		allowed, exists := s.dm.AccessTokens.Load(tx.admin)
 		if !exists || !allowed {
-			return oauthFailure(c, 403, "OAuth 配置或管理员会话已失效")
+			return oauthFailure(c, http.StatusForbidden, "OAuth 配置或管理员会话已失效")
 		}
 		config := s.config
 		config.Subject = subject
 		if err := s.persist(config); err != nil {
-			return oauthFailure(c, 500, "OAuth 绑定保存失败")
+			return oauthFailure(c, http.StatusInternalServerError, "OAuth 绑定保存失败")
 		}
-		return c.Redirect(303, "/v2ui/#/misc/base-setting?oauth=bound")
+		return c.Redirect(http.StatusSeeOther, "/v2ui/#/misc/base-setting?oauth=bound")
 	}
 	if subject != s.config.Subject {
-		return oauthFailure(c, 403, "该第三方账号未绑定")
+		return oauthFailure(c, http.StatusForbidden, "该第三方账号未绑定")
 	}
 	// A short same-origin HTML response installs the existing WebUI token without putting it in a URL.
 	token := oauthRandom() + oauthRandom()
@@ -335,5 +335,5 @@ func (s *oauthServer) callback(c echo.Context) error {
 	nonce := oauthRandom()
 	c.Response().Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'nonce-"+nonce+"'; base-uri 'none'; frame-ancestors 'none'")
 	encoded, _ := json.Marshal(token)
-	return c.HTML(200, "<!doctype html><meta charset=utf-8><title>OAuth 登录成功</title><script nonce=\""+nonce+"\">localStorage.setItem('token',"+string(encoded)+");location.replace('/v2ui/');</script>")
+	return c.HTML(http.StatusOK, "<!doctype html><meta charset=utf-8><title>OAuth 登录成功</title><script nonce=\""+nonce+"\">localStorage.setItem('token',"+string(encoded)+");location.replace('/v2ui/');</script>")
 }
