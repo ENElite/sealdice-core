@@ -274,3 +274,53 @@ func TestOAuthHTTPConfigurationGuards(t *testing.T) {
 		t.Fatal("demo mode accepted unbinding")
 	}
 }
+
+func TestOAuthRoutesWithManagementMiddleware(t *testing.T) {
+	manager := &dice.DiceManager{UIPasswordHash: "password"}
+	manager.AccessTokens.Store("admin", true)
+	previousDice := myDice
+	myDice = &dice.Dice{Parent: manager}
+	t.Cleanup(func() { myDice = previousDice })
+	server := &oauthServer{
+		dm:      manager,
+		file:    filepath.Join(t.TempDir(), "oauth.json"),
+		pending: make(map[string]oauthTransaction),
+		config:  oauthConfig{AuthorizationURL: "https://provider.example/authorize", TokenURL: "https://provider.example/token", UserinfoURL: "https://provider.example/userinfo", ClientID: "client", RedirectURL: "https://dice.example/sd-api/oauth/callback", Subject: "bound-sub"},
+	}
+	e := echo.New()
+	e.Use(managementAuthMiddleware)
+	server.register(e)
+	request := func(method, path, token string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, oauthPath+path, strings.NewReader("{}"))
+		r.Header.Set("Content-Type", "application/json")
+		if token != "" {
+			r.Header.Set("Token", token)
+		}
+		w := httptest.NewRecorder()
+		e.ServeHTTP(w, r)
+		return w
+	}
+	if w := request("GET", "/status", ""); w.Code != 200 || !strings.Contains(w.Body.String(), `"enabled":true`) {
+		t.Fatalf("anonymous status blocked: %d %s", w.Code, w.Body.String())
+	}
+	if w := request("POST", "/login", ""); w.Code != 200 || !strings.Contains(w.Body.String(), "provider.example/authorize") {
+		t.Fatalf("anonymous OAuth login blocked: %d %s", w.Code, w.Body.String())
+	}
+	if w := request("GET", "/callback", ""); w.Code != 403 || !strings.Contains(w.Body.String(), "返回 WebUI") {
+		t.Fatalf("public callback did not reach OAuth validation: %d %s", w.Code, w.Body.String())
+	}
+	for _, route := range []struct{ method, path string }{{"GET", "/config"}, {"PUT", "/config"}, {"POST", "/bind"}, {"DELETE", "/binding"}, {"GET", "/login"}, {"POST", "/status"}, {"GET", "/callback/other"}} {
+		if w := request(route.method, route.path, ""); w.Code != 403 {
+			t.Errorf("anonymous %s %s escaped management auth: %d", route.method, route.path, w.Code)
+		}
+	}
+	if w := request("GET", "/config", "admin"); w.Code != 200 {
+		t.Fatalf("authenticated config blocked: %d %s", w.Code, w.Body.String())
+	}
+	if w := request("POST", "/bind", "admin"); w.Code != 200 {
+		t.Fatalf("authenticated binding blocked: %d %s", w.Code, w.Body.String())
+	}
+	if server.config.Subject != "bound-sub" {
+		t.Fatal("starting binding changed the existing binding before callback")
+	}
+}
