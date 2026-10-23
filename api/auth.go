@@ -27,7 +27,10 @@ func managementAuthMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 			"POST /sd-api/signin",
 			"GET /sd-api/signin/salt",
 			"GET /sd-api/utils/ga/:uid",
-			"POST /sd-api/force_stop":
+			"POST /sd-api/force_stop",
+			"GET /sd-api/oauth/status",
+			"POST /sd-api/oauth/login",
+			"GET /sd-api/oauth/callback":
 			return next(c)
 		default:
 			return authenticated(c)

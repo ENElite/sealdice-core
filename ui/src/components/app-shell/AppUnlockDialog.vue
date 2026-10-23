@@ -24,6 +24,7 @@
       placeholder="请输入 UI 密码"
       :disabled="authSession.signinMutation.isPending.value"
     />
+    <n-button v-if="oauthEnabled" @click="oauthLogin">OAuth 登录</n-button>
     <n-text v-if="errorText" class="unlock-error" type="error">
       {{ errorText }}
     </n-text>
@@ -53,13 +54,29 @@
 </template>
 
 <script setup lang="tsx">
-import { computed, ref, watch } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
+import { oauthRequest, startOAuth } from '@/features/auth/oauth';
 import { useMessage } from 'naive-ui';
 import { getSdApiV2BaseSecurityCheck } from '@/api';
 import { getErrorMessage } from '@/features/auth/error';
 import { useAuthSession } from '@/features/auth/useAuthSession';
 import { notifyError } from '@/features/feedback/notifyError';
 
+const oauthEnabled = ref(false);
+onMounted(() => {
+  void oauthRequest<{ enabled: boolean }>('status')
+    .then(result => {
+      oauthEnabled.value = result.enabled;
+    })
+    .catch(() => {});
+});
+async function oauthLogin() {
+  try {
+    await startOAuth('login');
+  } catch (error) {
+    message.error(String(error));
+  }
+}
 const authSession = useAuthSession();
 const message = useMessage();
 const password = ref('');
