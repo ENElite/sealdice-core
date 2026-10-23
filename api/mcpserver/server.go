@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -58,7 +59,7 @@ func NewHandler(router http.Handler, api huma.API, d *dice.Dice) http.Handler {
 				continue
 			}
 			schema.Properties["dryRun"].Default = method != http.MethodGet
-			operation := operation{method: method, path: path, schema: schema}
+			action := operation{method: method, path: path, schema: schema}
 			name := strings.ToLower(method) + "_" + strings.NewReplacer("/", "_", "-", "_", "{", "", "}", "").Replace(strings.TrimPrefix(path, "/sd-api/v2/"))
 			// MCP schemas are self-contained. Huma's registry is retained separately for
 			// validation; references in the wire schema point to local JSON Schema defs.
@@ -73,7 +74,7 @@ func NewHandler(router http.Handler, api huma.API, d *dice.Dice) http.Handler {
 				description = op.Summary
 			}
 			description += " [" + method + " " + path + "]. dryRun=true validates and previews without executing; validation does not check runtime state. Non-GET calls default to dry-run; use dryRun=false to execute."
-			srv.AddTool(mcp.NewToolWithRawSchema(name, description, raw), operation.handler(router, api))
+			srv.AddTool(mcp.NewToolWithRawSchema(name, description, raw), action.handler(router, api))
 		}
 	}
 	stream := server.NewStreamableHTTPServer(srv, server.WithStateLess(true), server.WithHTTPContextFunc(func(ctx context.Context, r *http.Request) context.Context {
@@ -194,11 +195,11 @@ func (op operation) handler(router http.Handler, api huma.API) server.ToolHandle
 		// Normalize numbers exactly as Huma's JSON parser does before schema checks.
 		raw, err := json.Marshal(args)
 		if err != nil {
-			return mcp.NewToolResultError("invalid arguments"), nil
+			return mcp.NewToolResultError("invalid arguments"), nil //nolint:nilerr // MCP reports tool failures as isError results, not JSON-RPC errors.
 		}
 		var values map[string]any
 		if err = json.Unmarshal(raw, &values); err != nil {
-			return mcp.NewToolResultError("arguments must be an object"), nil
+			return mcp.NewToolResultError("arguments must be an object"), nil //nolint:nilerr // MCP reports tool failures as isError results, not JSON-RPC errors.
 		}
 		if values == nil {
 			values = map[string]any{}
@@ -226,8 +227,12 @@ func (op operation) handler(router http.Handler, api huma.API) server.ToolHandle
 		if len(validation.Errors) > 0 {
 			messages := make([]string, 0, len(validation.Errors))
 			for _, issue := range validation.Errors {
-				detail := issue.(*huma.ErrorDetail)
-				messages = append(messages, detail.Location+": "+detail.Message)
+				var detail *huma.ErrorDetail
+				if errors.As(issue, &detail) {
+					messages = append(messages, detail.Location+": "+detail.Message)
+				} else {
+					messages = append(messages, "schema validation failed")
+				}
 			}
 			return mcp.NewToolResultError("invalid arguments: " + strings.Join(messages, "; ")), nil
 		}
@@ -272,7 +277,7 @@ func (op operation) handler(router http.Handler, api huma.API) server.ToolHandle
 		}
 		request, err := http.NewRequestWithContext(ctx, op.method, path, body)
 		if err != nil {
-			return mcp.NewToolResultError("invalid API request"), nil
+			return mcp.NewToolResultError("invalid API request"), nil //nolint:nilerr // MCP reports tool failures as isError results, not JSON-RPC errors.
 		}
 		request.Header.Set("Authorization", "Bearer "+middleware.TokenFromHTTPRequest(original))
 		request.Header.Set("Content-Type", "application/json")

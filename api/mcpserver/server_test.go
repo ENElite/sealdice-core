@@ -243,7 +243,7 @@ func TestMCPTransportRestrictions(t *testing.T) {
 		{mcpserver.Endpoint + "?token=admin", "", "", 401},
 		{mcpserver.Endpoint, "https://evil.example", "admin", 403},
 	} {
-		req := httptest.NewRequest("POST", test.path, strings.NewReader(`{}`))
+		req := httptest.NewRequest(http.MethodPost, test.path, strings.NewReader(`{}`))
 		req.Header.Set("Origin", test.origin)
 		req.Header.Set("Token", test.token)
 		rec := httptest.NewRecorder()
