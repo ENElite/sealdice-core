@@ -142,12 +142,14 @@
           </n-button>
         </n-upload>
       </div>
+      <OAuthSettings v-if="field.id === 'ui-password'" />
     </div>
   </SettingRow>
 </template>
 
 <script setup lang="ts">
 import { computed, ref } from 'vue';
+import OAuthSettings from './OAuthSettings.vue';
 import type { UploadCustomRequestOptions } from 'naive-ui';
 import type {
   BaseSettingFieldModel,

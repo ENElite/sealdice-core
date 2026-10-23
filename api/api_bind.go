@@ -570,6 +570,7 @@ func BindV1(e *echo.Echo, _myDice *dice.DiceManager) {
 	// side effects; individual handler checks remain as defense in depth.
 	// 注意：/sd-api/v2 由 huma 层中间件自行鉴权（含公开端点），该中间件已排除 v2。
 	e.Use(managementAuthMiddleware)
+	bindOAuthRoutes(e, _myDice)
 
 	e.GET(prefix+"/preInfo", preInfo)
 	e.GET(prefix+"/baseInfo", baseInfo) // 已完成
