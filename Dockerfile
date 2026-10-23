@@ -3,7 +3,8 @@
 # Keep CGO and runtime glibc compatible.
 FROM golang:1.25-bookworm AS source
 ARG GOPROXY=https://proxy.golang.org,direct
-ENV GOPROXY=${GOPROXY}
+ENV GOPROXY=${GOPROXY} \
+    GOMAXPROCS=4
 WORKDIR /sealdice
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod \
@@ -17,7 +18,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 FROM node:22-bookworm-slim AS ui
 RUN corepack enable && corepack prepare pnpm@10.14.0 --activate
 WORKDIR /sealdice/ui
-COPY ui/package.json ui/pnpm-lock.yaml ./
+COPY ui/package.json ui/pnpm-lock.yaml ui/pnpm-workspace.yaml ./
 COPY ui/scripts/require-pnpm.mjs ./scripts/require-pnpm.mjs
 RUN --mount=type=cache,target=/pnpm/store \
     pnpm install --frozen-lockfile --store-dir=/pnpm/store
@@ -36,7 +37,7 @@ RUN npm install --global @openai/codex@0.157.1
 
 FROM python:3.13.5-slim-bookworm
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends bash ca-certificates git libstdc++6 tzdata && \
+    apt-get install -y --no-install-recommends bash ca-certificates curl git libstdc++6 tzdata && \
     rm -rf /var/lib/apt/lists/*
 ENV TZ=Asia/Shanghai \
     DB_TYPE=sqlite \
