@@ -37,34 +37,34 @@ func TestOAuthBindingAndLogin(t *testing.T) {
 			code := oauthRandom()
 			codes.Store(code, q.Get("code_challenge"))
 			target.RawQuery = url.Values{"code": {code}, "state": {q.Get("state")}}.Encode()
-			http.Redirect(w, r, target.String(), 302)
+			http.Redirect(w, r, target.String(), http.StatusFound)
 		case "/token":
 			_ = r.ParseForm()
 			challenge, valid := codes.LoadAndDelete(r.Form.Get("code"))
 			digest := sha256.Sum256([]byte(r.Form.Get("code_verifier")))
 			if !valid || challenge != base64.RawURLEncoding.EncodeToString(digest[:]) || r.Form.Get("client_secret") != "secret" || r.Form.Get("client_id") != "client" || r.Form.Get("grant_type") != "authorization_code" || r.Form.Get("redirect_uri") != "http://127.0.0.1/sd-api/oauth/callback" {
-				w.WriteHeader(400)
+				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
 			_, _ = fmt.Fprint(w, `{"access_token":"provider-token","token_type":"Bearer"}`)
 		case "/userinfo":
 			if r.Header.Get("Authorization") != "Bearer provider-token" {
-				w.WriteHeader(401)
+				w.WriteHeader(http.StatusUnauthorized)
 				return
 			}
 			_ = json.NewEncoder(w).Encode(map[string]string{"sub": subject.Load().(string)})
 		default:
-			w.WriteHeader(404)
+			w.WriteHeader(http.StatusNotFound)
 		}
 	}))
 	defer provider.Close()
-	dm := &dice.DiceManager{UIPasswordHash: "password"}
-	dm.AccessTokens.Store("admin", true)
-	s := &oauthServer{dm: dm, file: filepath.Join(t.TempDir(), "oauth.json"), pending: make(map[string]oauthTransaction), client: provider.Client()}
+	manager := &dice.DiceManager{UIPasswordHash: "password"}
+	manager.AccessTokens.Store("admin", true)
+	s := &oauthServer{dm: manager, file: filepath.Join(t.TempDir(), "oauth.json"), pending: make(map[string]oauthTransaction), client: provider.Client()}
 	s.config = oauthConfig{AuthorizationURL: provider.URL + "/authorize", TokenURL: provider.URL + "/token", UserinfoURL: provider.URL + "/userinfo", ClientID: "client", ClientSecret: "secret", RedirectURL: "http://127.0.0.1/sd-api/oauth/callback", Scope: "openid"}
 	e := echo.New()
 	s.register(e)
-	e.GET("/protected", func(c echo.Context) error { return c.NoContent(204) }, middleware.EchoAuthMiddleware(&dice.Dice{Parent: dm}))
+	e.GET("/protected", func(c echo.Context) error { return c.NoContent(http.StatusNoContent) }, middleware.EchoAuthMiddleware(&dice.Dice{Parent: manager}))
 	request := func(method, path, token string, cookie *http.Cookie) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(method, path, strings.NewReader("{}"))
 		r.Header.Set("Content-Type", "application/json")
@@ -78,8 +78,8 @@ func TestOAuthBindingAndLogin(t *testing.T) {
 	}
 	start := func(mode string) (string, *http.Cookie) {
 		t.Helper()
-		w := request("POST", oauthPath+"/"+mode, "admin", nil)
-		if w.Code != 200 {
+		w := request(http.MethodPost, oauthPath+"/"+mode, "admin", nil)
+		if w.Code != http.StatusOK {
 			t.Fatalf("start %s: %d %s", mode, w.Code, w.Body.String())
 		}
 		var result struct {
@@ -93,7 +93,7 @@ func TestOAuthBindingAndLogin(t *testing.T) {
 			t.Fatal(err)
 		}
 		_ = authorized.Body.Close()
-		if authorized.StatusCode != 302 {
+		if authorized.StatusCode != http.StatusFound {
 			t.Fatalf("authorization failed: %d", authorized.StatusCode)
 		}
 		callback, err := url.Parse(authorized.Header.Get("Location"))
@@ -102,51 +102,51 @@ func TestOAuthBindingAndLogin(t *testing.T) {
 		}
 		return callback.RequestURI(), w.Result().Cookies()[0]
 	}
-	if w := request("POST", oauthPath+"/login", "", nil); w.Code != 403 {
+	if w := request(http.MethodPost, oauthPath+"/login", "", nil); w.Code != http.StatusForbidden {
 		t.Fatal("unbound source must reject login")
 	}
 	callback, cookie := start("bind")
-	if w := request("GET", callback, "", cookie); w.Code != 303 || s.config.Subject != "admin-sub" {
+	if w := request(http.MethodGet, callback, "", cookie); w.Code != http.StatusSeeOther || s.config.Subject != "admin-sub" {
 		t.Fatalf("bind failed: %d %s", w.Code, w.Body.String())
 	}
-	if w := request("GET", callback, "", cookie); w.Code != 403 {
+	if w := request(http.MethodGet, callback, "", cookie); w.Code != http.StatusForbidden {
 		t.Fatal("replay accepted")
 	}
 	callback, cookie = start("login")
-	if w := request("GET", callback, "", cookie); w.Code != 200 || !strings.Contains(w.Body.String(), "localStorage.setItem('token'") {
+	if w := request(http.MethodGet, callback, "", cookie); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "localStorage.setItem('token'") {
 		t.Fatalf("login failed: %d %s", w.Code, w.Body.String())
 	}
 	var issued string
-	dm.AccessTokens.Range(func(key string, _ bool) bool {
+	manager.AccessTokens.Range(func(key string, _ bool) bool {
 		if key != "admin" {
 			issued = key
 		}
 		return true
 	})
-	if w := request("GET", "/protected", issued, nil); w.Code != 204 || issued == "" {
+	if w := request(http.MethodGet, "/protected", issued, nil); w.Code != http.StatusNoContent || issued == "" {
 		t.Fatal("OAuth token cannot access protected API")
 	}
 	subject.Store("stranger")
 	callback, cookie = start("login")
-	if w := request("GET", callback, "", cookie); w.Code != 403 {
+	if w := request(http.MethodGet, callback, "", cookie); w.Code != http.StatusForbidden {
 		t.Fatal("unbound account accepted")
 	}
 	subject.Store("admin-sub")
 	callback, cookie = start("bind")
-	if w := request("GET", callback, "", &http.Cookie{Name: cookie.Name, Value: "other-browser"}); w.Code != 403 {
+	if w := request(http.MethodGet, callback, "", &http.Cookie{Name: cookie.Name, Value: "other-browser"}); w.Code != http.StatusForbidden {
 		t.Fatal("other browser accepted")
 	}
-	if w := request("GET", callback, "", cookie); w.Code != 403 {
+	if w := request(http.MethodGet, callback, "", cookie); w.Code != http.StatusForbidden {
 		t.Fatal("consumed state accepted")
 	}
 	callback, cookie = start("bind")
-	dm.AccessTokens.Delete("admin")
-	if w := request("GET", callback, "", cookie); w.Code != 403 {
+	manager.AccessTokens.Delete("admin")
+	if w := request(http.MethodGet, callback, "", cookie); w.Code != http.StatusForbidden {
 		t.Fatal("revoked admin accepted")
 	}
-	dm.AccessTokens.Store("admin", true)
+	manager.AccessTokens.Store("admin", true)
 	callback, cookie = start("login")
-	if w := request("GET", callback+"&error=access_denied", "", cookie); w.Code != 403 {
+	if w := request(http.MethodGet, callback+"&error=access_denied", "", cookie); w.Code != http.StatusForbidden {
 		t.Fatal("provider rejection accepted")
 	}
 	callback, cookie = start("login")
@@ -154,7 +154,7 @@ func TestOAuthBindingAndLogin(t *testing.T) {
 	badQuery := badCallback.Query()
 	badQuery.Set("code", "bad")
 	badCallback.RawQuery = badQuery.Encode()
-	if w := request("GET", badCallback.String(), "", cookie); w.Code != 403 {
+	if w := request(http.MethodGet, badCallback.String(), "", cookie); w.Code != http.StatusForbidden {
 		t.Fatal("failed token exchange accepted")
 	}
 	callback, cookie = start("login")
@@ -164,17 +164,17 @@ func TestOAuthBindingAndLogin(t *testing.T) {
 		s.pending[key] = tx
 	}
 	s.mu.Unlock()
-	if w := request("GET", callback, "", cookie); w.Code != 403 {
+	if w := request(http.MethodGet, callback, "", cookie); w.Code != http.StatusForbidden {
 		t.Fatal("expired state accepted")
 	}
 	callback, cookie = start("bind")
 	if err := s.persist(s.config); err != nil {
 		t.Fatal(err)
 	}
-	if w := request("GET", callback, "", cookie); w.Code != 403 {
+	if w := request(http.MethodGet, callback, "", cookie); w.Code != http.StatusForbidden {
 		t.Fatal("invalidated transaction accepted")
 	}
-	if w := request("GET", oauthPath+"/config", "admin", nil); strings.Contains(w.Body.String(), "secret\"") && strings.Contains(w.Body.String(), ":\"secret\"") {
+	if w := request(http.MethodGet, oauthPath+"/config", "admin", nil); strings.Contains(w.Body.String(), "secret\"") && strings.Contains(w.Body.String(), ":\"secret\"") {
 		t.Fatal("client secret exposed")
 	}
 }
@@ -225,9 +225,9 @@ func TestOAuthPersistenceAndFailures(t *testing.T) {
 }
 
 func TestOAuthHTTPConfigurationGuards(t *testing.T) {
-	dm := &dice.DiceManager{UIPasswordHash: "password"}
-	dm.AccessTokens.Store("admin", true)
-	s := &oauthServer{dm: dm, file: filepath.Join(t.TempDir(), "oauth.json"), pending: make(map[string]oauthTransaction)}
+	manager := &dice.DiceManager{UIPasswordHash: "password"}
+	manager.AccessTokens.Store("admin", true)
+	s := &oauthServer{dm: manager, file: filepath.Join(t.TempDir(), "oauth.json"), pending: make(map[string]oauthTransaction)}
 	e := echo.New()
 	s.register(e)
 	request := func(method, path, token, origin, body string) *httptest.ResponseRecorder {
@@ -241,36 +241,36 @@ func TestOAuthHTTPConfigurationGuards(t *testing.T) {
 	}
 	config := oauthConfig{AuthorizationURL: "https://provider.example/authorize", TokenURL: "https://provider.example/token", UserinfoURL: "https://provider.example/userinfo", ClientID: "client", ClientSecret: "secret", RedirectURL: "https://dice.example/sd-api/oauth/callback", Subject: "injected-sub"}
 	data, _ := json.Marshal(config)
-	if w := request("PUT", "/config", "", "", string(data)); w.Code != 401 {
+	if w := request(http.MethodPut, "/config", "", "", string(data)); w.Code != http.StatusUnauthorized {
 		t.Fatal("unauthenticated configuration accepted")
 	}
-	if w := request("POST", "/bind", "", "", "{}"); w.Code != 401 {
+	if w := request(http.MethodPost, "/bind", "", "", "{}"); w.Code != http.StatusUnauthorized {
 		t.Fatal("unauthenticated binding accepted")
 	}
-	dm.UIPasswordHash = ""
-	if w := request("PUT", "/config", "admin", "", string(data)); w.Code != 400 {
+	manager.UIPasswordHash = ""
+	if w := request(http.MethodPut, "/config", "admin", "", string(data)); w.Code != http.StatusBadRequest {
 		t.Fatal("source enabled without password")
 	}
-	dm.UIPasswordHash = "password"
-	if w := request("PUT", "/config", "admin", "", string(data)); w.Code != 204 || s.config.Subject != "" {
+	manager.UIPasswordHash = "password"
+	if w := request(http.MethodPut, "/config", "admin", "", string(data)); w.Code != http.StatusNoContent || s.config.Subject != "" {
 		t.Fatalf("save configuration failed: %d %s", w.Code, w.Body.String())
 	}
-	if w := request("POST", "/bind", "admin", "https://attacker.example", "{}"); w.Code != 403 {
+	if w := request(http.MethodPost, "/bind", "admin", "https://attacker.example", "{}"); w.Code != http.StatusForbidden {
 		t.Fatal("cross-origin binding accepted")
 	}
-	if w := request("GET", "/config", "admin", "", ""); strings.Contains(w.Body.String(), `"clientSecret":"secret"`) {
+	if w := request(http.MethodGet, "/config", "admin", "", ""); strings.Contains(w.Body.String(), `"clientSecret":"secret"`) {
 		t.Fatal("secret leaked")
 	}
 	config.RedirectURL = "https://dice.example/incorrect-callback"
 	data, _ = json.Marshal(config)
-	if w := request("PUT", "/config", "admin", "", string(data)); w.Code != 400 {
+	if w := request(http.MethodPut, "/config", "admin", "", string(data)); w.Code != http.StatusBadRequest {
 		t.Fatal("incorrect callback accepted")
 	}
-	dm.JustForTest = true
-	if w := request("POST", "/bind", "admin", "", "{}"); w.Code != 403 {
+	manager.JustForTest = true
+	if w := request(http.MethodPost, "/bind", "admin", "", "{}"); w.Code != http.StatusForbidden {
 		t.Fatal("demo mode accepted binding")
 	}
-	if w := request("DELETE", "/binding", "admin", "", "{}"); w.Code != 403 {
+	if w := request(http.MethodDelete, "/binding", "admin", "", "{}"); w.Code != http.StatusForbidden {
 		t.Fatal("demo mode accepted unbinding")
 	}
 }
@@ -300,24 +300,24 @@ func TestOAuthRoutesWithManagementMiddleware(t *testing.T) {
 		e.ServeHTTP(w, r)
 		return w
 	}
-	if w := request("GET", "/status", ""); w.Code != 200 || !strings.Contains(w.Body.String(), `"enabled":true`) {
+	if w := request(http.MethodGet, "/status", ""); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"enabled":true`) {
 		t.Fatalf("anonymous status blocked: %d %s", w.Code, w.Body.String())
 	}
-	if w := request("POST", "/login", ""); w.Code != 200 || !strings.Contains(w.Body.String(), "provider.example/authorize") {
+	if w := request(http.MethodPost, "/login", ""); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "provider.example/authorize") {
 		t.Fatalf("anonymous OAuth login blocked: %d %s", w.Code, w.Body.String())
 	}
-	if w := request("GET", "/callback", ""); w.Code != 403 || !strings.Contains(w.Body.String(), "返回 WebUI") {
+	if w := request(http.MethodGet, "/callback", ""); w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "返回 WebUI") {
 		t.Fatalf("public callback did not reach OAuth validation: %d %s", w.Code, w.Body.String())
 	}
-	for _, route := range []struct{ method, path string }{{"GET", "/config"}, {"PUT", "/config"}, {"POST", "/bind"}, {"DELETE", "/binding"}, {"GET", "/login"}, {"POST", "/status"}, {"GET", "/callback/other"}} {
-		if w := request(route.method, route.path, ""); w.Code != 403 {
+	for _, route := range []struct{ method, path string }{{http.MethodGet, "/config"}, {http.MethodPut, "/config"}, {http.MethodPost, "/bind"}, {http.MethodDelete, "/binding"}, {http.MethodGet, "/login"}, {http.MethodPost, "/status"}, {http.MethodGet, "/callback/other"}} {
+		if w := request(route.method, route.path, ""); w.Code != http.StatusForbidden {
 			t.Errorf("anonymous %s %s escaped management auth: %d", route.method, route.path, w.Code)
 		}
 	}
-	if w := request("GET", "/config", "admin"); w.Code != 200 {
+	if w := request(http.MethodGet, "/config", "admin"); w.Code != http.StatusOK {
 		t.Fatalf("authenticated config blocked: %d %s", w.Code, w.Body.String())
 	}
-	if w := request("POST", "/bind", "admin"); w.Code != 200 {
+	if w := request(http.MethodPost, "/bind", "admin"); w.Code != http.StatusOK {
 		t.Fatalf("authenticated binding blocked: %d %s", w.Code, w.Body.String())
 	}
 	if server.config.Subject != "bound-sub" {
