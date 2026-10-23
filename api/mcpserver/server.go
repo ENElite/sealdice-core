@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -186,7 +187,10 @@ func operationSchema(op *huma.Operation) *huma.Schema {
 
 func (op operation) handler(router http.Handler, api huma.API) server.ToolHandlerFunc {
 	return func(ctx context.Context, call mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		args := call.GetArguments()
+		args, object := call.GetRawArguments().(map[string]any)
+		if call.GetRawArguments() != nil && !object {
+			return mcp.NewToolResultError("arguments must be an object"), nil
+		}
 		// Normalize numbers exactly as Huma's JSON parser does before schema checks.
 		raw, err := json.Marshal(args)
 		if err != nil {
@@ -198,6 +202,24 @@ func (op operation) handler(router http.Handler, api huma.API) server.ToolHandle
 		}
 		if values == nil {
 			values = map[string]any{}
+		}
+		// Huma accepts case-insensitive object keys to match encoding/json.
+		// The CLI envelope must be exact: otherwise a misspelled dryRun could
+		// silently fall back to its default instead of the caller's intent.
+		for name, value := range values {
+			field, known := op.schema.Properties[name]
+			if !known {
+				return mcp.NewToolResultError("unknown argument: " + name), nil
+			}
+			if name == "path" || name == "query" {
+				if entries, ok := value.(map[string]any); ok {
+					for key := range entries {
+						if _, exists := field.Properties[key]; !exists {
+							return mcp.NewToolResultError("unknown argument: " + name + "." + key), nil
+						}
+					}
+				}
+			}
 		}
 		validation := &huma.ValidateResult{}
 		huma.Validate(api.OpenAPI().Components.Schemas, op.schema, &huma.PathBuffer{}, huma.ModeWriteToServer, values, validation)
@@ -212,7 +234,7 @@ func (op operation) handler(router http.Handler, api huma.API) server.ToolHandle
 		path := op.path
 		if params, ok := values["path"].(map[string]any); ok {
 			for name, value := range params {
-				text := fmt.Sprint(value)
+				text := scalarString(value)
 				// Echo unescapes path params; reject segment escapes rather than allowing
 				// a parameter to select another management route.
 				if text == "" || text == "." || text == ".." || strings.ContainsAny(text, "/\\%?#") {
@@ -224,7 +246,7 @@ func (op operation) handler(router http.Handler, api huma.API) server.ToolHandle
 		query := url.Values{}
 		if params, ok := values["query"].(map[string]any); ok {
 			for name, value := range params {
-				query.Set(name, fmt.Sprint(value))
+				query.Set(name, scalarString(value))
 			}
 		}
 		if encoded := query.Encode(); encoded != "" {
@@ -327,4 +349,13 @@ func referencedSchemas(root any, registry huma.Registry) map[string]any {
 	}
 	visit(root)
 	return defs
+}
+
+// JSON numbers decode as float64. Integer HTTP parameters must use ordinary
+// decimal notation because strconv.ParseInt does not accept an exponent.
+func scalarString(value any) string {
+	if number, ok := value.(float64); ok {
+		return strconv.FormatFloat(number, 'f', -1, 64)
+	}
+	return fmt.Sprint(value)
 }

@@ -100,6 +100,12 @@ func TestMCPManagementIntegration(t *testing.T) {
 	huma.Get(grp, "/stream", func(context.Context, *struct{}) (*huma.StreamResponse, error) {
 		return &huma.StreamResponse{Body: func(ctx huma.Context) { _, _ = ctx.BodyWriter().Write([]byte("binary")) }}, nil
 	})
+	huma.Get(grp, "/numeric/{id}", func(_ context.Context, req *struct {
+		ID        int64 `path:"id"`
+		Timestamp int64 `query:"timestamp"`
+	}) (*struct{ Body map[string]int64 }, error) {
+		return &struct{ Body map[string]int64 }{Body: map[string]int64{"id": req.ID, "timestamp": req.Timestamp}}, nil
+	})
 	pathReads := 0
 	huma.Get(grp, "/item/{id}", func(_ context.Context, req *struct {
 		ID string `path:"id"`
@@ -158,6 +164,16 @@ func TestMCPManagementIntegration(t *testing.T) {
 		result = tool(t, app, "get_config_item_id", map[string]any{"path": map[string]any{"id": id}})
 		if result["isError"] != true || pathReads != 0 {
 			t.Fatalf("unsafe path accepted: %q result=%+v", id, result)
+		}
+	}
+	result = tool(t, app, "get_config_numeric_id", map[string]any{"path": map[string]any{"id": 1000000}, "query": map[string]any{"timestamp": 1234567890123}})
+	if result["isError"] == true || !strings.Contains(fmt.Sprint(result), `"id":1000000`) || !strings.Contains(fmt.Sprint(result), `"timestamp":1234567890123`) {
+		t.Fatalf("numeric parameters did not round-trip: %+v", result)
+	}
+	for _, args := range []any{[]any{}, "invalid", false} {
+		result = tool(t, app, "get_config_test", args)
+		if result["isError"] != true {
+			t.Fatalf("non-object arguments accepted: %+v", result)
 		}
 	}
 	dm.AccessTokens.Delete("admin")
