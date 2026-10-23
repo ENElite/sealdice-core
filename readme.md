@@ -452,3 +452,9 @@ pnpm --dir ui run build:embed
 关于 dicescript 的信息，请移步 <https://github.com/sealdice/dicescript>
 
 而出于兼容性的考虑，V1 版本的解释器将继续保留，直到 2.0 版本。
+
+### admin 分支管理工具
+
+- [JS Bash 命令行](docs/jsvm-exec.md)：可信插件可用 `seal.bash(command, options)` 在海豹所在容器内执行脚本。
+- [MCP 管理接口](api/mcpserver/README.md)：使用现有 WebUI token 连接 `/sd-api/v2/mcp`，读取或修改后端设置；写操作默认 dry-run。
+- [WebUI OAuth 登录](api/oauth.md)：在新版 WebUI 的密码设置处配置 OAuth 源并显式绑定账号，之后使用第三方登录并沿用现有登录态。
