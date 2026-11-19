@@ -368,21 +368,49 @@ func ReplyToSenderRaw(ctx *MsgContext, msg *Message, text string, flag string) {
 	}
 }
 
-func replyToSenderRawNoCheck(ctx *MsgContext, msg *Message, text string, flag string) {
+func replyToSenderRawNoCheck(ctx *MsgContext, msg *Message, text string, flag string, nameCardLine string) {
+	// 保持原有拼接顺序：名片先加到正文，再套上别名/代骰前缀。
+	text = prependOfficialQQNameCard(nameCardLine, text)
+	if ctx.AliasPrefixText != "" {
+		text = ctx.AliasPrefixText + text
+		ctx.AliasPrefixText = ""
+	}
+	if ctx.DelegateText != "" {
+		text = ctx.DelegateText + text
+		ctx.DelegateText = ""
+	}
+	sendCtx := withOfficialQQNameCardContext(ctx, nameCardLine)
 	inGroup := msg.MessageType == "group"
 	if inGroup {
-		replyGroupRawNoCheck(ctx, msg, text, flag)
+		replyGroupRawNoCheck(sendCtx, msg, text, flag)
 	} else {
-		replyPersonRawNoCheck(ctx, msg, text, flag)
+		replyPersonRawNoCheck(sendCtx, msg, text, flag)
 	}
+}
+
+// withOfficialQQNameCardContext 为单次发送准备上下文，记录仅用于展示的名片前缀。
+// 使用副本避免并发回复之间互相覆盖该状态。
+func withOfficialQQNameCardContext(ctx *MsgContext, nameCardLine string) *MsgContext {
+	if ctx == nil || nameCardLine == "" {
+		return ctx
+	}
+	sendCtx := ctx.ShallowCopy()
+	sendCtx.officialQQNameCardLine = nameCardLine
+	return sendCtx
 }
 func ReplyToSender(ctx *MsgContext, msg *Message, text string) {
 	if ctx == nil || msg == nil || ctx.Dice == nil {
 		logger.M().Errorf("ReplyToSender 被调用，但没有正确传递参数！请检查您的参数！: ctx=%v, msg=%v", ctx, msg)
 		return
 	}
+	// 名片求值使用命令的 VM，必须在启动发送协程前完成。
+	nameCardLine := buildOfficialQQNameCardLine(ctx)
 	panicHandler.Once(logger.M(), func() {
-		ReplyToSenderRaw(ctx, msg, text, "")
+		if msg.MessageType == "group" {
+			replyGroupRaw(ctx, msg, text, "", nameCardLine)
+		} else {
+			replyPersonRaw(ctx, msg, text, "", nameCardLine)
+		}
 	})
 }
 
@@ -391,12 +419,18 @@ func ReplyToSenderNoCheck(ctx *MsgContext, msg *Message, text string) {
 		logger.M().Errorf("ReplyToSenderNoCheck 被调用，但没有正确传递参数！请检查您的参数！: ctx=%v, msg=%v", ctx, msg)
 		return
 	}
+	// 名片求值使用命令的 VM，必须在启动发送协程前完成。
+	nameCardLine := buildOfficialQQNameCardLine(ctx)
 	panicHandler.Once(logger.M(), func() {
-		replyToSenderRawNoCheck(ctx, msg, withOfficialQQNameCard(ctx, text), "")
+		replyToSenderRawNoCheck(ctx, msg, text, "", nameCardLine)
 	})
 }
 
 func ReplyGroupRaw(ctx *MsgContext, msg *Message, text string, flag string) {
+	replyGroupRaw(ctx, msg, text, flag, buildOfficialQQNameCardLine(ctx))
+}
+
+func replyGroupRaw(ctx *MsgContext, msg *Message, text string, flag string, nameCardLine string) {
 	if ctx.AliasPrefixText != "" {
 		text = ctx.AliasPrefixText + text
 		ctx.AliasPrefixText = ""
@@ -406,7 +440,7 @@ func ReplyGroupRaw(ctx *MsgContext, msg *Message, text string, flag string) {
 		ctx.DelegateText = ""
 	}
 
-	text = withOfficialQQNameCard(ctx, text)
+	text = prependOfficialQQNameCard(nameCardLine, text)
 
 	if ctx.Dice.Config.RateLimitEnabled && msg.Platform == "QQ" {
 		if !spamCheckPerson(ctx, msg) {
@@ -440,7 +474,7 @@ func ReplyGroupRaw(ctx *MsgContext, msg *Message, text string, flag string) {
 			}
 		}
 	}
-	replyGroupRawNoCheck(ctx, msg, text, flag)
+	replyGroupRawNoCheck(withOfficialQQNameCardContext(ctx, nameCardLine), msg, text, flag)
 }
 
 func replyGroupRawNoCheck(ctx *MsgContext, msg *Message, text string, flag string) {
@@ -473,6 +507,10 @@ func ReplyGroup(ctx *MsgContext, msg *Message, text string) {
 }
 
 func ReplyPersonRaw(ctx *MsgContext, msg *Message, text string, flag string) {
+	replyPersonRaw(ctx, msg, text, flag, buildOfficialQQNameCardLine(ctx))
+}
+
+func replyPersonRaw(ctx *MsgContext, msg *Message, text string, flag string, nameCardLine string) {
 	if ctx.AliasPrefixText != "" {
 		text = ctx.AliasPrefixText + text
 		ctx.AliasPrefixText = ""
@@ -482,7 +520,7 @@ func ReplyPersonRaw(ctx *MsgContext, msg *Message, text string, flag string) {
 		ctx.DelegateText = ""
 	}
 
-	text = withOfficialQQNameCard(ctx, text)
+	text = prependOfficialQQNameCard(nameCardLine, text)
 
 	if ctx.Dice.Config.RateLimitEnabled && msg.Platform == "QQ" {
 		spamCheckPerson(ctx, msg)
@@ -513,7 +551,7 @@ func ReplyPersonRaw(ctx *MsgContext, msg *Message, text string, flag string) {
 			}
 		}
 	}
-	replyPersonRawNoCheck(ctx, msg, text, flag)
+	replyPersonRawNoCheck(withOfficialQQNameCardContext(ctx, nameCardLine), msg, text, flag)
 }
 
 func replyPersonRawNoCheck(ctx *MsgContext, msg *Message, text string, flag string) {
@@ -707,7 +745,7 @@ func spamCheckPerson(ctx *MsgContext, msg *Message) bool {
 		replyToSenderRawNoCheck(
 			ctx, msg,
 			DiceFormatTmpl(ctx, "核心:刷屏_警告内容_个人"),
-			"",
+			"", "",
 		)
 	}
 
@@ -764,7 +802,7 @@ func spamCheckGroup(ctx *MsgContext, msg *Message) bool {
 		replyToSenderRawNoCheck(
 			ctx, msg,
 			DiceFormatTmpl(ctx, "核心:刷屏_警告内容_群组"),
-			"",
+			"", "",
 		)
 	}
 

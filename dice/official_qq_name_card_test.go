@@ -4,20 +4,56 @@ package dice
 import (
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	ds "github.com/sealdice/dicescript"
+	"go.uber.org/zap"
+
+	"sealdice-core/model"
+	"sealdice-core/utils/constant"
 )
 
 type nameCardSpyAdapter struct {
 	*mockPlatformAdapter
-	setCardCalls int
-	lastCard     string
+	setCardCalls    int
+	lastCard        string
+	sendCardLines   []string
+	sendMessageText []string
 }
 
 func (s *nameCardSpyAdapter) SetGroupCardName(_ *MsgContext, name string) {
 	s.setCardCalls++
 	s.lastCard = name
+}
+
+func (s *nameCardSpyAdapter) SendToGroup(ctx *MsgContext, groupID, text, flag string) {
+	s.sendCardLines = append(s.sendCardLines, officialQQNameCardLineOf(ctx))
+	s.sendMessageText = append(s.sendMessageText, text)
+	s.mockPlatformAdapter.SendToGroup(ctx, groupID, text, flag)
+}
+
+func (s *nameCardSpyAdapter) SendToPerson(ctx *MsgContext, userID, text, flag string) {
+	s.sendCardLines = append(s.sendCardLines, officialQQNameCardLineOf(ctx))
+	s.sendMessageText = append(s.sendMessageText, text)
+	s.mockPlatformAdapter.SendToPerson(ctx, userID, text, flag)
+}
+
+func newNameCardReplyTestContext() (*MsgContext, *nameCardSpyAdapter) {
+	spy := &nameCardSpyAdapter{mockPlatformAdapter: newMockPlatformAdapter()}
+	d := &Dice{Logger: zap.NewNop().Sugar()}
+	d.Config.OfficialQQUseMarkdown = true
+	d.Config.OfficialQQUseNameCard = true
+	return &MsgContext{
+		Dice: d,
+		EndPoint: &EndPointInfo{
+			EndPointInfoBase: EndPointInfoBase{Platform: "QQ", ProtocolType: "official"},
+			Adapter:          spy,
+		},
+		Group:  &GroupInfo{GroupID: "QQ-Group:10001"},
+		Player: &GroupPlayerInfo{UserID: "QQ:20002", ValueMapTemp: &ds.ValueMap{}},
+	}, spy
 }
 
 func newNameCardTestContext(t *testing.T) (*MsgContext, *nameCardSpyAdapter) {
@@ -126,7 +162,7 @@ func TestBuildOfficialQQNameCardLine(t *testing.T) {
 	ctx.Player.AutoSetNameTemplate = "茶叶 HP10/10"
 
 	line := buildOfficialQQNameCardLine(ctx)
-	const want = "<font color=\"#FF0000\" size=\"1\">茶叶 HP10/10</font>\n"
+	const want = "<font color=\"#FF0000\" size=\"1\">茶叶 HP10/10</font>\n\n"
 	if line != want {
 		t.Fatalf("line = %q, want %q", line, want)
 	}
@@ -138,7 +174,19 @@ func TestBuildOfficialQQNameCardLineUsesConfiguredTemplate(t *testing.T) {
 	ctx.Dice.Config.OfficialQQNameCardTmpl = "<b>{card}</b>"
 
 	line := buildOfficialQQNameCardLine(ctx)
-	const want = "<b>茶叶 HP10/10</b>\n"
+	const want = "<b>茶叶 HP10/10</b>"
+	if line != want {
+		t.Fatalf("line = %q, want %q", line, want)
+	}
+}
+
+func TestBuildOfficialQQNameCardLineUpgradesLegacyDefaultTemplate(t *testing.T) {
+	ctx, _ := newNameCardTestContext(t)
+	ctx.Player.AutoSetNameTemplate = "茶叶 HP10/10"
+	ctx.Dice.Config.OfficialQQNameCardTmpl = legacyOfficialQQNameCardTemplate
+
+	line := buildOfficialQQNameCardLine(ctx)
+	const want = "<font color=\"#FF0000\" size=\"1\">茶叶 HP10/10</font>\n\n"
 	if line != want {
 		t.Fatalf("line = %q, want %q", line, want)
 	}
@@ -150,7 +198,7 @@ func TestBuildOfficialQQNameCardLineFallsBackWhenTemplateIsEmpty(t *testing.T) {
 	ctx.Dice.Config.OfficialQQNameCardTmpl = ""
 
 	line := buildOfficialQQNameCardLine(ctx)
-	const want = "<font color=\"#FF0000\" size=\"1\">茶叶 HP10/10</font>\n"
+	const want = "<font color=\"#FF0000\" size=\"1\">茶叶 HP10/10</font>\n\n"
 	if line != want {
 		t.Fatalf("line = %q, want %q", line, want)
 	}
@@ -162,19 +210,31 @@ func TestBuildOfficialQQNameCardLineFallsBackWhenPlaceholderMissing(t *testing.T
 	ctx.Dice.Config.OfficialQQNameCardTmpl = "<b>没有占位符</b>"
 
 	line := buildOfficialQQNameCardLine(ctx)
-	const want = "<font color=\"#FF0000\" size=\"1\">茶叶 HP10/10</font>\n"
+	const want = "<font color=\"#FF0000\" size=\"1\">茶叶 HP10/10</font>\n\n"
 	if line != want {
 		t.Fatalf("line = %q, want %q", line, want)
 	}
 }
 
-func TestBuildOfficialQQNameCardLineDoesNotDuplicateTrailingNewline(t *testing.T) {
+func TestBuildOfficialQQNameCardLinePreservesConfiguredTrailingNewline(t *testing.T) {
 	ctx, _ := newNameCardTestContext(t)
 	ctx.Player.AutoSetNameTemplate = "茶叶 HP10/10"
 	ctx.Dice.Config.OfficialQQNameCardTmpl = "<b>{card}</b>\n"
 
 	line := buildOfficialQQNameCardLine(ctx)
 	const want = "<b>茶叶 HP10/10</b>\n"
+	if line != want {
+		t.Fatalf("line = %q, want %q", line, want)
+	}
+}
+
+func TestBuildOfficialQQNameCardLineUnescapesConfiguredNewlines(t *testing.T) {
+	ctx, _ := newNameCardTestContext(t)
+	ctx.Player.AutoSetNameTemplate = "茶叶 HP10/10"
+	ctx.Dice.Config.OfficialQQNameCardTmpl = "<b>{card}</b>\\n\\n"
+
+	line := buildOfficialQQNameCardLine(ctx)
+	const want = "<b>茶叶 HP10/10</b>\n\n"
 	if line != want {
 		t.Fatalf("line = %q, want %q", line, want)
 	}
@@ -224,7 +284,7 @@ func TestBuildOfficialQQNameCardLineEscapesMarkup(t *testing.T) {
 	ctx.Player.AutoSetNameTemplate = "A<B>&C"
 
 	line := buildOfficialQQNameCardLine(ctx)
-	const want = "<font color=\"#FF0000\" size=\"1\">A&lt;B&gt;&amp;C</font>\n"
+	const want = "<font color=\"#FF0000\" size=\"1\">A&lt;B&gt;&amp;C</font>\n\n"
 	if line != want {
 		t.Fatalf("line = %q, want %q", line, want)
 	}
@@ -235,7 +295,7 @@ func TestWithOfficialQQNameCardPrependsOnce(t *testing.T) {
 	ctx.Player.AutoSetNameTemplate = "茶叶 HP10/10"
 
 	text := withOfficialQQNameCard(ctx, "D100=50")
-	const want = "<font color=\"#FF0000\" size=\"1\">茶叶 HP10/10</font>\nD100=50"
+	const want = "<font color=\"#FF0000\" size=\"1\">茶叶 HP10/10</font>\n\nD100=50"
 	if text != want {
 		t.Fatalf("text = %q, want %q", text, want)
 	}
@@ -256,11 +316,11 @@ func TestReplyGroupAndPersonIncludeNameCard(t *testing.T) {
 	ReplyGroup(ctx, msg, "D100=50")
 	ReplyPerson(ctx, msg, "D100=60")
 
-	wantGroup := "<font color=\"#FF0000\" size=\"1\">茶叶 HP10/10</font>\nD100=50"
+	wantGroup := "<font color=\"#FF0000\" size=\"1\">茶叶 HP10/10</font>\n\nD100=50"
 	if len(spy.groupMsgs) != 1 || spy.groupMsgs[0] != wantGroup {
 		t.Fatalf("group messages = %#v, want [%q]", spy.groupMsgs, wantGroup)
 	}
-	wantPerson := "<font color=\"#FF0000\" size=\"1\">茶叶 HP10/10</font>\nD100=60"
+	wantPerson := "<font color=\"#FF0000\" size=\"1\">茶叶 HP10/10</font>\n\nD100=60"
 	if len(spy.personMsgs) != 1 || spy.personMsgs[0] != wantPerson {
 		t.Fatalf("person messages = %#v, want [%q]", spy.personMsgs, wantPerson)
 	}
@@ -283,5 +343,121 @@ func TestReplyDoesNotIncludeNameCardForOtherPlatforms(t *testing.T) {
 
 	if len(spy.groupMsgs) != 1 || spy.groupMsgs[0] != "D100=50" {
 		t.Fatalf("group messages = %#v, want [%q]", spy.groupMsgs, "D100=50")
+	}
+}
+
+func TestReplyToSenderEvaluatesNameCardBeforeReturning(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		send        func(*MsgContext, *Message, string)
+		wantMessage string
+		panicOnEval bool
+	}{
+		{"checked", ReplyToSender, "<b>HP10</b>\n\ndelegate:alias:reply", false},
+		{"unchecked", ReplyToSenderNoCheck, "delegate:alias:<b>HP10</b>\n\nreply", false},
+		{"checked_panic", ReplyToSender, "delegate:alias:reply", true},
+		{"unchecked_panic", ReplyToSenderNoCheck, "delegate:alias:reply", true},
+	} {
+		for _, messageType := range []string{"group", "private"} {
+			t.Run(tc.name+"/"+messageType, func(t *testing.T) {
+				ctx, spy := newNameCardReplyTestContext()
+				ctx.MessageType = messageType
+				ctx.Player.AutoSetNameTemplate = "HP{reviewValue}"
+				ctx.Dice.Config.OfficialQQNameCardTmpl = "<b>{card}</b>\n\n"
+				ctx.AliasPrefixText = "alias:"
+				ctx.DelegateText = "delegate:"
+				ctx.CreateVmIfNotExists()
+
+				var evaluations atomic.Int32
+				var hp atomic.Int64
+				hp.Store(10)
+				ctx.vm.GlobalValueLoadOverwriteFunc = func(name string, value *ds.VMValue) *ds.VMValue {
+					if name != "reviewValue" {
+						return value
+					}
+					evaluations.Add(1)
+					if tc.panicOnEval {
+						panic("attribute lookup failed")
+					}
+					return ds.NewIntVal(ds.IntType(hp.Load()))
+				}
+				msg := &Message{
+					MessageType: messageType,
+					GroupID:     ctx.Group.GroupID,
+					Sender:      SenderBase{UserID: ctx.Player.UserID},
+				}
+
+				tc.send(ctx, msg, "reply")
+				if got := evaluations.Load(); got != 1 {
+					t.Errorf("name-card evaluations before return = %d, want 1", got)
+				}
+				// 后续命令处理可以继续使用 VM，已排队的回复应保留发送时的名片。
+				hp.Store(20)
+				result := ctx.Eval("answer = 40+2; answer", nil)
+				if result.vm.Error != nil {
+					t.Errorf("subsequent evaluation failed: %v", result.vm.Error)
+				} else if value, ok := result.ReadInt(); !ok || value != 42 {
+					t.Errorf("subsequent assignment = %v, want 42; name-card store hook must be restored", result.ToString())
+				}
+				reply, ok := spy.waitForMsg(2 * time.Second)
+				if !ok {
+					t.Fatal("timed out waiting for reply")
+				}
+				if reply != tc.wantMessage {
+					t.Errorf("reply = %q, want %q", reply, tc.wantMessage)
+				}
+				if got := evaluations.Load(); got != 1 {
+					t.Errorf("name-card evaluations after send = %d, want 1", got)
+				}
+			})
+		}
+	}
+}
+
+func TestEvalPlayerGroupCardTemplateReturnsErrorOnPanic(t *testing.T) {
+	ctx, _ := newNameCardReplyTestContext()
+	ctx.CreateVmIfNotExists()
+	failure := errors.New("attribute lookup failed")
+	ctx.vm.GlobalValueLoadOverwriteFunc = func(_ string, _ *ds.VMValue) *ds.VMValue {
+		panic(failure)
+	}
+
+	text, err := EvalPlayerGroupCardTemplate(ctx, "HP{reviewValue}")
+	if text != "" || err == nil || !strings.Contains(err.Error(), failure.Error()) {
+		t.Fatalf("name-card evaluation = (%q, %v), want empty card and attribute error", text, err)
+	}
+}
+
+func TestOfficialQQPCTagWithNameCard(t *testing.T) {
+	ctx, spy := newNameCardTestContext(t)
+	if err := ctx.Dice.DBOperator.GetDataDB(constant.WRITE).AutoMigrate(&model.AttributesItemModel{}); err != nil {
+		t.Fatal(err)
+	}
+	ctx.Group.System = "coc7"
+	ctx.SystemTemplate = ctx.Group.GetCharTemplate(ctx.Dice)
+	ctx.Player.AutoSetNameTemplate = "{$t玩家_RAW} SAN{理智} HP{生命值}/{生命值上限} DEX{敏捷}"
+	character, err := ctx.Dice.AttrsManager.CharNew(ctx.Player.UserID, "调查员", "coc7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg := newGroupMsg(ctx.Group.GroupID, ctx.Player.UserID, ".pc tag 1")
+	args := CommandParse(msg.Message, []string{"pc"}, []string{"."}, msg.Platform, false)
+	result := ctx.Dice.CmdMap["pc"].Solve(ctx, msg, args)
+	if !result.Solved {
+		t.Fatal("pc tag was not handled")
+	}
+	reply, ok := spy.waitForMsg(2 * time.Second)
+	if !ok {
+		t.Fatal("timed out waiting for pc tag reply")
+	}
+	if !strings.Contains(reply, "调查员 SAN") || strings.Count(reply, "<font") != 1 || strings.Contains(reply, "错误:") {
+		t.Fatalf("unexpected pc tag reply: %q", reply)
+	}
+	bindingID, err := ctx.Dice.AttrsManager.CharGetBindingId(ctx.Group.GroupID, ctx.Player.UserID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bindingID != character.Id {
+		t.Fatalf("bound character = %q, want %q", bindingID, character.Id)
 	}
 }

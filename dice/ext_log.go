@@ -5,10 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -64,10 +65,20 @@ func ensureGroupLogState(ctx *MsgContext, group *GroupInfo) GroupLogState {
 }
 
 // EvalPlayerGroupCardTemplate 只求值 .sn 模板，不调用平台改名接口。
-func EvalPlayerGroupCardTemplate(ctx *MsgContext, tmpl string) (string, error) {
+// 求值 panic 转为 error，避免名片异常中断正文回复。
+func EvalPlayerGroupCardTemplate(ctx *MsgContext, tmpl string) (result string, err error) {
 	if ctx == nil || ctx.Dice == nil {
 		return "", errors.New("无法求值名片模板：上下文为空")
 	}
+	defer func() {
+		if r := recover(); r != nil {
+			result = ""
+			err = fmt.Errorf("名片模板求值异常: %v", r)
+			if ctx.Dice.Logger != nil {
+				ctx.Dice.Logger.Errorf("%v\n%s", err, debug.Stack())
+			}
+		}
+	}()
 	if ctx.SystemTemplate == nil && ctx.Group != nil {
 		ctx.SystemTemplate = ctx.Group.GetCharTemplate(ctx.Dice)
 	}
@@ -605,15 +616,14 @@ func RegisterBuiltinExtLog(self *Dice) {
 				logFileNamePrefix := DiceFormatTmpl(ctx, "日志:记录_导出_文件名前缀")
 				logFile, notice, err := GetLogTxt(ctx, group.GroupID, logName, logFileNamePrefix)
 				if err != nil {
-					reply := err.Error()
+					ctx.Dice.Logger.Errorf("导出日志失败: 群=%s 记录=%s err=%v", group.GroupID, logName, err)
+					reply := logExportErrorReply(err)
 					if strings.Contains(reply, "此log不存在") || strings.Contains(reply, "名字是否正确") {
 						reply += logKeyHintText()
 					}
 					ReplyToSenderRaw(ctx, msg, reply, "skip")
 					return CmdExecuteResult{Matched: true, Solved: true}
 				}
-				defer os.Remove(logFile)
-
 				var emails []string
 				if len(cmdArgs.Args) > 2 {
 					emails = cmdArgs.Args[2:]
@@ -647,12 +657,7 @@ func RegisterBuiltinExtLog(self *Dice) {
 					ReplyToSenderRaw(ctx, msg, DiceFormat(ctx, "{核心:骰子名字}未配置邮箱，将直接发送记录文件"), "skip")
 				}
 
-				var uri string
-				if runtime.GOOS == "windows" {
-					uri = "files:///" + logFile
-				} else {
-					uri = "files://" + logFile
-				}
+				uri := logExportFileURI(logFile)
 				SendFileToSenderRaw(ctx, msg, uri, "skip")
 				VarSetValueStr(ctx, "$t文件名字", logFileNamePrefix)
 				reply := DiceFormatTmpl(ctx, "日志:记录_导出_成功")
@@ -987,6 +992,8 @@ func RegisterBuiltinExtLog(self *Dice) {
 			if flag == "skip" {
 				return
 			}
+			// 官方 QQ 名片是仅用于展示的前缀，跑团日志里保留干净正文。
+			message := stripOfficialQQNameCard(officialQQNameCardLineOf(ctx), msg.Message)
 			privateCommandListenCheck()
 			if msg.MessageType == "private" && ctx.CommandHideFlag != "" {
 				if privateCommandListenHas(ctx.CommandID) {
@@ -1005,7 +1012,7 @@ func RegisterBuiltinExtLog(self *Dice) {
 						IMUserID:    UserIDExtract(ctx.EndPoint.UserID),
 						UniformID:   ctx.EndPoint.UserID,
 						Time:        time.Now().Unix(),
-						Message:     msg.Message,
+						Message:     message,
 						IsDice:      true,
 						CommandID:   ctx.CommandID,
 						CommandInfo: ctx.CommandInfo,
@@ -1036,7 +1043,7 @@ func RegisterBuiltinExtLog(self *Dice) {
 						IMUserID:    UserIDExtract(ctx.EndPoint.UserID),
 						UniformID:   ctx.EndPoint.UserID,
 						Time:        time.Now().Unix(),
-						Message:     msg.Message,
+						Message:     message,
 						IsDice:      true,
 						CommandID:   ctx.CommandID,
 						CommandInfo: ctx.CommandInfo,
@@ -1057,9 +1064,15 @@ func RegisterBuiltinExtLog(self *Dice) {
 					}
 					groupMsgInfoSet(msg.RawID)
 
+					// 官方 QQ 没有改名接口，平台昵称不会变成 .sn 名片，因此日志记录名片内容。
+					nickname := officialQQLogNickname(ctx, msg.Sender.Nickname)
+					if nickname == "" {
+						nickname = ctx.Player.Name
+					}
+
 					// <2022-02-15 09:54:14.0> [摸鱼king]: 有的 但我不知道
 					a := model.LogOneItem{
-						Nickname:  ctx.Player.Name,
+						Nickname:  nickname,
 						IMUserID:  UserIDExtract(ctx.Player.UserID),
 						UniformID: ctx.Player.UserID,
 						Time:      msg.Time,
@@ -1179,15 +1192,25 @@ func LogEditByID(ctx *MsgContext, groupID, content string, messageID interface{}
 }
 
 func GetLogTxt(ctx *MsgContext, groupID string, logName string, fileNamePrefix string) (string, string, error) {
-	// 创建临时文件
 	tempPattern, notice := storylog.BuildTempPattern(fileNamePrefix)
-	tempLog, err := os.CreateTemp("", tempPattern)
+	exportDir, err := filepath.Abs(filepath.Join(ctx.Dice.BaseConfig.DataDir, "log-exports"))
 	if err != nil {
-		return "", notice, errors.New("log导出出现未知错误")
+		return "", notice, fmt.Errorf("解析日志导出目录失败: %w", err)
 	}
+	if mkdirErr := os.MkdirAll(exportDir, 0o755); mkdirErr != nil {
+		return "", notice, fmt.Errorf("创建日志导出目录失败: %w", mkdirErr)
+	}
+
+	// 日志导出文件需要被 OneBot/NapCat 等外部进程从共享数据卷读取，
+	// 因此直接落在 data/default/log-exports，而不是系统临时目录。
+	tempLog, err := os.CreateTemp(exportDir, tempPattern)
+	if err != nil {
+		return "", notice, fmt.Errorf("创建日志导出文件失败: %w", err)
+	}
+	keepFile := false
 	defer func() {
 		_ = tempLog.Close()
-		if err != nil {
+		if !keepFile {
 			_ = os.Remove(tempLog.Name()) //nolint:gosec
 		}
 	}()
@@ -1259,7 +1282,35 @@ func GetLogTxt(ctx *MsgContext, groupID string, logName string, fileNamePrefix s
 		return "", notice, errors.New("此log不存在，或条目数为空，名字是否正确？")
 	}
 
+	// 仅在文件完整写入后开放共享读取，避免外部进程读到半成品。
+	if err := tempLog.Chmod(0o644); err != nil {
+		return "", notice, fmt.Errorf("设置日志导出文件权限失败: %w", err)
+	}
+	keepFile = true
 	return tempLog.Name(), notice, nil
+}
+
+func logExportErrorReply(err error) string {
+	var pathErr *os.PathError
+	if !errors.As(err, &pathErr) || pathErr.Path == "" {
+		return err.Error()
+	}
+
+	// 保留操作和失败原因供用户排查，完整路径仅写入运行日志。
+	replyErr := *pathErr
+	replyErr.Path = filepath.Base(pathErr.Path)
+	return strings.Replace(err.Error(), pathErr.Error(), replyErr.Error(), 1)
+}
+
+func logExportFileURI(filePath string) string {
+	if absolutePath, err := filepath.Abs(filePath); err == nil {
+		filePath = absolutePath
+	}
+	uriPath := filepath.ToSlash(filePath)
+	if !strings.HasPrefix(uriPath, "/") {
+		uriPath = "/" + uriPath
+	}
+	return (&url.URL{Scheme: "files", Path: uriPath}).String()
 }
 
 func LogSendToBackend(ctx *MsgContext, groupID string, logName string) (bool, string, string, error) {
